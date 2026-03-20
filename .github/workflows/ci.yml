@@ -24,7 +24,7 @@ jobs:
           version: "0.5.21"
 
       - name: Install dev dependencies
-        run: uv sync --frozen
+        run: uv sync --frozen --extra dev
 
       - name: Run ruff check
         run: uv run ruff check core/ server/
@@ -68,7 +68,7 @@ jobs:
           version: "0.5.21"
 
       - name: Install dependencies
-        run: uv sync --frozen
+        run: uv sync --frozen --extra dev
 
       - name: Run tests
         run: uv run pytest tests/ -v
