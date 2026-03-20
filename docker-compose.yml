@@ -43,12 +43,6 @@ services:
       - SYNCCONTEXT_HOST=0.0.0.0
       - SYNCCONTEXT_PORT=9002
       - SYNCCONTEXT_LOG_LEVEL=INFO
-    healthcheck:
-      test: ["CMD", "curl", "-sf", "http://localhost:9002/mcp"]
-      interval: 30s
-      timeout: 10s
-      retries: 5
-      start_period: 30s
     deploy:
       mode: replicated
       replicas: 1
