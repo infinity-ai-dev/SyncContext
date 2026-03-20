@@ -187,6 +187,60 @@ class MemoryService:
 
         return [self._row_to_memory(row) for row in rows]
 
+    async def list_tags(self) -> list[dict[str, int]]:
+        """List all unique tags with their usage counts, sorted by count descending."""
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT tag, COUNT(*) AS cnt
+                FROM memories, UNNEST(tags) AS tag
+                WHERE project_token = $1
+                GROUP BY tag
+                ORDER BY cnt DESC
+                """,
+                self._project_token,
+            )
+        return [{row["tag"]: row["cnt"]} for row in rows]
+
+    async def list_contributors(self) -> list[dict[str, int]]:
+        """List all distinct authors with their memory counts, sorted by count descending."""
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT author, COUNT(*) AS cnt
+                FROM memories
+                WHERE project_token = $1 AND author IS NOT NULL
+                GROUP BY author
+                ORDER BY cnt DESC
+                """,
+                self._project_token,
+            )
+        return [{row["author"]: row["cnt"]} for row in rows]
+
+    async def search_by_file(self, file_path: str, limit: int = 20) -> list[Memory]:
+        """Find memories whose file_path contains the given substring."""
+        async with self._pool.acquire() as conn:
+            rows = await conn.fetch(
+                """
+                SELECT * FROM memories
+                WHERE project_token = $1 AND file_path ILIKE $2
+                ORDER BY created_at DESC
+                LIMIT $3
+                """,
+                self._project_token,
+                f"%{file_path}%",
+                limit,
+            )
+        return [self._row_to_memory(row) for row in rows]
+
+    async def bulk_save_memories(self, items: list[MemoryCreate]) -> list[Memory]:
+        """Save multiple memories in sequence, returning all created Memory objects."""
+        results = []
+        for item in items:
+            memory = await self.save_memory(item)
+            results.append(memory)
+        return results
+
     async def get_project_context(self) -> ProjectContext:
         """Get aggregated project summary."""
         async with self._pool.acquire() as conn:

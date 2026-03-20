@@ -65,3 +65,48 @@ class SearchService:
 
         logger.info(f"Search for '{query[:50]}...' returned {len(results)} results")
         return results
+
+    async def find_similar(
+        self,
+        memory_id: UUID,
+        top_k: int = 5,
+        min_score: float = 0.3,
+    ) -> list[SearchResult]:
+        """Find memories similar to the one identified by memory_id.
+
+        The source memory itself is excluded from results.
+        Returns an empty list if the memory does not exist.
+        """
+        source = await self._memory_service.get_memory(memory_id)
+        if not source:
+            return []
+
+        # Re-embed the source content to use as the query vector
+        query_vector = await self._embeddings.embed(source.content)
+
+        vector_results = await self._vector_store.search(
+            query_vector=query_vector,
+            top_k=top_k * 2 + 1,  # +1 to account for the source memory itself
+            filter_metadata={"project_token": self._project_token},
+        )
+
+        results = []
+        for vr in vector_results:
+            if vr["score"] < min_score:
+                continue
+
+            candidate_id = UUID(str(vr["id"]))
+            if candidate_id == memory_id:
+                continue  # exclude the source memory
+
+            memory = await self._memory_service.get_memory(candidate_id)
+            if not memory:
+                continue
+
+            results.append(SearchResult(memory=memory, score=vr["score"]))
+
+            if len(results) >= top_k:
+                break
+
+        logger.info(f"find_similar for {memory_id} returned {len(results)} results")
+        return results

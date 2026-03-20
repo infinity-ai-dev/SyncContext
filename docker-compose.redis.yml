@@ -1,4 +1,4 @@
-# Override file for Redis-based deployments
+# Override file for Redis-based vector store deployments.
 # Usage: docker compose -f docker-compose.yml -f docker-compose.redis.yml up
 
 services:
@@ -6,6 +6,11 @@ services:
     environment:
       SYNCCONTEXT_VECTOR_STORE: redis
       SYNCCONTEXT_REDIS_URL: redis://redis:6379/0
+    depends_on:
+      redis:
+        condition: service_healthy
+    networks:
+      - synccontext-net
 
   redis:
     image: redis/redis-stack:latest
@@ -14,6 +19,26 @@ services:
       - "6379:6379"
     volumes:
       - redisdata:/data
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
+    networks:
+      - synccontext-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
 
 volumes:
   redisdata:
+    driver: local
+
+networks:
+  synccontext-net:
+    driver: bridge

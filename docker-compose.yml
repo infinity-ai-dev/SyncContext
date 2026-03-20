@@ -1,6 +1,8 @@
 services:
   synccontext:
-    build: .
+    build:
+      context: .
+      dockerfile: Dockerfile
     environment:
       SYNCCONTEXT_PROJECT_TOKEN: ${SYNCCONTEXT_PROJECT_TOKEN:-dev-token}
       SYNCCONTEXT_DATABASE_URL: postgresql://synccontext:synccontext@postgres:5432/synccontext
@@ -8,11 +10,30 @@ services:
       SYNCCONTEXT_GEMINI_API_KEY: ${SYNCCONTEXT_GEMINI_API_KEY:-}
       SYNCCONTEXT_OPENAI_API_KEY: ${SYNCCONTEXT_OPENAI_API_KEY:-}
       SYNCCONTEXT_VECTOR_STORE: pgvector
-      SYNCCONTEXT_TRANSPORT: stdio
+      SYNCCONTEXT_TRANSPORT: ${SYNCCONTEXT_TRANSPORT:-stdio}
+      SYNCCONTEXT_LOG_LEVEL: ${SYNCCONTEXT_LOG_LEVEL:-INFO}
     depends_on:
       postgres:
         condition: service_healthy
     stdin_open: true
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
+    networks:
+      - synccontext-net
+    # SyncContext is a long-running MCP process; there is no HTTP endpoint to
+    # probe by default (stdio transport). The healthcheck below verifies that
+    # the Python interpreter and the installed package are intact.
+    healthcheck:
+      test: ["CMD", "python", "-c", "import server.main"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
 
   postgres:
     image: pgvector/pgvector:pg17
@@ -24,11 +45,26 @@ services:
       - pgdata:/var/lib/postgresql/data
     ports:
       - "5432:5432"
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 256M
+    networks:
+      - synccontext-net
     healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U synccontext"]
+      test: ["CMD-SHELL", "pg_isready -U synccontext -d synccontext"]
       interval: 5s
       timeout: 5s
       retries: 5
+      start_period: 10s
 
 volumes:
   pgdata:
+    driver: local
+
+networks:
+  synccontext-net:
+    driver: bridge
