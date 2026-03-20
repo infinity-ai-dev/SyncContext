@@ -7,11 +7,11 @@ runtime: python
 entry: server/main.py
 
 build:
-  install: pip install .
+  install: pip install -e .
 
 startCommand:
   type: stdio
-  command: python -m server.main
+  command: python -c "from server.main import main; main()"
 
 secrets:
   - name: SYNCCONTEXT_DATABASE_URL
