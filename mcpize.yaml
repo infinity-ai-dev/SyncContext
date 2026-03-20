@@ -3,24 +3,24 @@ name: synccontext
 description: |
   Shared team memory for AI coding agents. Save architecture decisions, patterns, and conventions — every team member's AI agent gets instant access via semantic search. 14 tools, multi-project isolation, pgvector, auto-detect embeddings (Gemini/OpenAI/Ollama).
 
-runtime: container
-entry: infinitytools/synccontext:latest
+runtime: python
+entry: server/main.py
+
+build:
+  install: uv sync --frozen --no-dev
 
 startCommand:
   type: stdio
-  command: synccontext
-
-bridge:
-  mode: stdio
+  command: uv run synccontext
 
 secrets:
   - name: SYNCCONTEXT_DATABASE_URL
     required: true
-    description: "PostgreSQL connection string with pgvector enabled. Required for server startup."
+    description: "PostgreSQL connection string with pgvector enabled."
 
   - name: SYNCCONTEXT_DIRECT_URL
     required: false
-    description: "Direct PostgreSQL connection used for migrations/DDL when DATABASE_URL points to a pooler."
+    description: "Direct PostgreSQL connection for migrations when DATABASE_URL uses a pooler."
 
   - name: SYNCCONTEXT_GEMINI_API_KEY
     required: false
@@ -32,12 +32,12 @@ secrets:
 
   - name: SYNCCONTEXT_OLLAMA_BASE_URL
     required: false
-    description: "Ollama server URL for offline embeddings. E.g. http://localhost:11434"
+    description: "Ollama server URL for offline embeddings."
 
   - name: SYNCCONTEXT_PROJECT_TOKEN
     required: true
-    description: "Shared project token used by the hosted MCPize deployment."
+    description: "Shared project token for the hosted deployment."
 
   - name: SYNCCONTEXT_PROJECT_NAME
     required: false
-    description: "Shared project display name used when the hosted deployment auto-creates the project."
+    description: "Project display name (auto-created on first connection)."
