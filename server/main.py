@@ -38,88 +38,101 @@ async def lifespan(server: FastMCP):
     if settings.transport != "stdio":
         logger.info(f"Listening: {settings.host}:{settings.port}")
 
-    # 1. Connect to PostgreSQL
-    logger.info("Connecting to PostgreSQL...")
-    pool, runtime_database_url = await _create_database_pool(settings, logger)
-    version = await pool.fetchval("SELECT version()")
-    logger.info(f"Database connected — {version.split(',')[0]}")
+    pool = None
+    vector_store = None
+    embeddings = None
+    token_auth = None
+    degraded = False
 
-    # 2. Run migrations
-    migration_database_url = settings.resolve_migration_url(runtime_database_url)
-    if migration_database_url == runtime_database_url:
-        logger.info("Executing migrations...")
-        await run_migrations(pool)
-    else:
-        logger.info("Executing migrations via direct database connection...")
-        migration_pool = await asyncpg.create_pool(
-            migration_database_url,
-            min_size=1,
-            max_size=2,
-            **connection_kwargs_from_url(migration_database_url),
-        )
-        try:
-            await run_migrations(migration_pool)
-        finally:
-            await migration_pool.close()
+    try:
+        # 1. Connect to PostgreSQL
+        logger.info("Connecting to PostgreSQL...")
+        pool, runtime_database_url = await _create_database_pool(settings, logger)
+        version = await pool.fetchval("SELECT version()")
+        logger.info(f"Database connected — {version.split(',')[0]}")
 
-    # 3. Initialize auth
-    logger.info("Initializing authentication...")
-    token_auth = TokenAuth(pool)
-    runtime_state.token_auth = token_auth
-
-    # When a shared project token is configured, ensure it exists on startup.
-    if settings.has_shared_project_token():
-        project = await token_auth.ensure_project(
-            token=settings.project_token,
-            name=settings.project_name,
-        )
-        if settings.transport == "stdio":
-            logger.info(f"Stdio project: {project.name} (id={project.id})")
+        # 2. Run migrations
+        migration_database_url = settings.resolve_migration_url(runtime_database_url)
+        if migration_database_url == runtime_database_url:
+            logger.info("Executing migrations...")
+            await run_migrations(pool)
         else:
-            logger.info(f"Shared HTTP project: {project.name} (id={project.id})")
+            logger.info("Executing migrations via direct database connection...")
+            migration_pool = await asyncpg.create_pool(
+                migration_database_url,
+                min_size=1,
+                max_size=2,
+                **connection_kwargs_from_url(migration_database_url),
+            )
+            try:
+                await run_migrations(migration_pool)
+            finally:
+                await migration_pool.close()
 
-    # 4. Initialize embedding provider
-    provider = settings.resolve_embedding_provider()
-    if settings.embedding_provider == "auto":
-        logger.info(f"Embedding provider auto-detected: {provider}")
-    else:
-        logger.info(f"Embedding provider: {provider}")
+        # 3. Initialize auth
+        logger.info("Initializing authentication...")
+        token_auth = TokenAuth(pool)
+        runtime_state.token_auth = token_auth
 
-    embedding_kwargs = {}
-    if provider == "gemini":
-        embedding_kwargs["api_key"] = settings.gemini_api_key
-    elif provider == "openai":
-        embedding_kwargs["api_key"] = settings.openai_api_key
-    elif provider == "ollama":
-        embedding_kwargs["base_url"] = settings.ollama_base_url
-        embedding_kwargs["model"] = settings.ollama_model
-        logger.info(f"Ollama endpoint: {settings.ollama_base_url} (model={settings.ollama_model})")
-
-    embeddings = create_embedding_provider(provider, **embedding_kwargs)
-    logger.info(f"Embedding provider ready — dimension={embeddings.dimension}")
-
-    # 5. Initialize vector store
-    logger.info(f"Initializing vector store: {settings.vector_store}...")
-    vector_store = create_vector_store(
-        settings.vector_store,
-        database_url=runtime_database_url,
-        redis_url=settings.redis_url,
-        dimension=embeddings.dimension,
-        direct_url=migration_database_url,
-    )
-    await vector_store.initialize()
-    logger.info(f"Vector store ready — backend={settings.vector_store}")
-
-    logger.info("=" * 50)
-    logger.info("SyncContext ready — all systems operational")
-    if settings.transport != "stdio":
         if settings.has_shared_project_token():
-            logger.info("HTTP requests without x-project-token will use the shared project token")
-        else:
-            logger.info("Projects are resolved per-request from x-project-token or Authorization")
-    logger.info("=" * 50)
+            project = await token_auth.ensure_project(
+                token=settings.project_token,
+                name=settings.project_name,
+            )
+            if settings.transport == "stdio":
+                logger.info(f"Stdio project: {project.name} (id={project.id})")
+            else:
+                logger.info(f"Shared HTTP project: {project.name} (id={project.id})")
 
-    # 6. Yield shared resources (NOT project-specific services)
+        # 4. Initialize embedding provider
+        provider = settings.resolve_embedding_provider()
+        if settings.embedding_provider == "auto":
+            logger.info(f"Embedding provider auto-detected: {provider}")
+        else:
+            logger.info(f"Embedding provider: {provider}")
+
+        embedding_kwargs = {}
+        if provider == "gemini":
+            embedding_kwargs["api_key"] = settings.gemini_api_key
+        elif provider == "openai":
+            embedding_kwargs["api_key"] = settings.openai_api_key
+        elif provider == "ollama":
+            embedding_kwargs["base_url"] = settings.ollama_base_url
+            embedding_kwargs["model"] = settings.ollama_model
+            logger.info(f"Ollama endpoint: {settings.ollama_base_url} (model={settings.ollama_model})")
+
+        embeddings = create_embedding_provider(provider, **embedding_kwargs)
+        logger.info(f"Embedding provider ready — dimension={embeddings.dimension}")
+
+        # 5. Initialize vector store
+        logger.info(f"Initializing vector store: {settings.vector_store}...")
+        vector_store = create_vector_store(
+            settings.vector_store,
+            database_url=runtime_database_url,
+            redis_url=settings.redis_url,
+            dimension=embeddings.dimension,
+            direct_url=migration_database_url,
+        )
+        await vector_store.initialize()
+        logger.info(f"Vector store ready — backend={settings.vector_store}")
+
+        logger.info("=" * 50)
+        logger.info("SyncContext ready — all systems operational")
+        if settings.transport != "stdio":
+            if settings.has_shared_project_token():
+                logger.info("HTTP requests without x-project-token will use the shared project token")
+            else:
+                logger.info("Projects are resolved per-request from x-project-token or Authorization")
+        logger.info("=" * 50)
+
+    except Exception as exc:
+        degraded = True
+        logger.warning("=" * 50)
+        logger.warning(f"SyncContext started in DEGRADED MODE: {exc}")
+        logger.warning("Tools are listed but calls will fail until database is available")
+        logger.warning("=" * 50)
+
+    # 6. Yield shared resources (tools are always registered, DB may be None)
     yield {
         "db_pool": pool,
         "vector_store": vector_store,
@@ -127,14 +140,18 @@ async def lifespan(server: FastMCP):
         "token_auth": token_auth,
         "admin_token": settings.admin_token,
         "project_token": settings.project_token,
+        "degraded": degraded,
     }
 
     # 7. Cleanup
     logger.info("Shutting down SyncContext...")
     runtime_state.token_auth = None
-    await embeddings.close()
-    await vector_store.close()
-    await pool.close()
+    if embeddings:
+        await embeddings.close()
+    if vector_store:
+        await vector_store.close()
+    if pool:
+        await pool.close()
     logger.info("Shutdown complete — goodbye")
 
 

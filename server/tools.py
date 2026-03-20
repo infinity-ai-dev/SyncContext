@@ -15,6 +15,13 @@ def register_tools(mcp: FastMCP) -> None:
     def _get_services(ctx: Context) -> tuple[MemoryService, SearchService]:
         """Create services scoped to the current request's project."""
         lc = ctx.request_context.lifespan_context
+
+        if lc.get("degraded"):
+            raise RuntimeError(
+                "SyncContext is in degraded mode — database is not connected. "
+                "Check SYNCCONTEXT_DATABASE_URL and ensure PostgreSQL with pgvector is reachable."
+            )
+
         pool = lc["db_pool"]
         vector_store = lc["vector_store"]
         embeddings = lc["embeddings"]
@@ -24,8 +31,6 @@ def register_tools(mcp: FastMCP) -> None:
         if project:
             project_id = project.id
         else:
-            # stdio mode: ensure_project was called in lifespan
-            # Fallback: use a zero UUID (shouldn't happen in practice)
             from uuid import UUID as _UUID
 
             project_id = _UUID("00000000-0000-0000-0000-000000000000")
