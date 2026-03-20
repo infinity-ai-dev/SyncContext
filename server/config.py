@@ -21,8 +21,8 @@ class Settings(BaseSettings):
     vector_store: Literal["pgvector", "redis"] = "pgvector"
     redis_url: str = "redis://localhost:6379/0"
 
-    # Embedding provider selection
-    embedding_provider: Literal["gemini", "openai", "ollama"] = "gemini"
+    # Embedding provider selection (auto-detected if not set explicitly)
+    embedding_provider: Literal["gemini", "openai", "ollama", "auto"] = "auto"
     embedding_dimension: int = 768
 
     # Provider API keys
@@ -30,7 +30,7 @@ class Settings(BaseSettings):
     openai_api_key: str | None = None
 
     # Ollama
-    ollama_base_url: str = "http://localhost:11434"
+    ollama_base_url: str | None = None
     ollama_model: str = "nomic-embed-text"
 
     # Server
@@ -38,3 +38,18 @@ class Settings(BaseSettings):
     host: str = "0.0.0.0"
     port: int = 8080
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
+
+    def resolve_embedding_provider(self) -> str:
+        """Resolve the embedding provider, auto-detecting from available credentials."""
+        if self.embedding_provider != "auto":
+            return self.embedding_provider
+
+        # Priority: ollama (if URL set) > openai (if key set) > gemini (if key set)
+        if self.ollama_base_url:
+            return "ollama"
+        if self.openai_api_key:
+            return "openai"
+        if self.gemini_api_key:
+            return "gemini"
+
+        return "gemini"  # fallback

@@ -8,8 +8,12 @@ version: "3.7"
 #
 # Variáveis de ambiente para configurar no Portainer:
 #   SYNCCONTEXT_PROJECT_TOKEN    - Token do projeto (gerado no passo de setup)
-#   SYNCCONTEXT_GEMINI_API_KEY   - Chave da API do Gemini (https://aistudio.google.com/apikey)
 #   SYNCCONTEXT_ADMIN_TOKEN      - Token admin para criar/listar projetos (opcional)
+#
+# Embedding (preencha apenas a credencial do provider desejado):
+#   SYNCCONTEXT_GEMINI_API_KEY   - Usa Gemini (grátis)
+#   SYNCCONTEXT_OPENAI_API_KEY   - Usa OpenAI
+#   SYNCCONTEXT_OLLAMA_BASE_URL  - Usa Ollama (offline)
 
 services:
   synccontext:
@@ -25,9 +29,12 @@ services:
       - SYNCCONTEXT_DATABASE_URL=postgresql://postgres:7y8auHScpUTrQWhjbrlu8yc0RzNib2wn@postgres:5432/synccontext
       # Vector Store
       - SYNCCONTEXT_VECTOR_STORE=pgvector
-      # Embedding
-      - SYNCCONTEXT_EMBEDDING_PROVIDER=gemini
-      - SYNCCONTEXT_GEMINI_API_KEY=${SYNCCONTEXT_GEMINI_API_KEY}
+      # Embedding (auto-detectado pela credencial preenchida)
+      - SYNCCONTEXT_EMBEDDING_PROVIDER=auto
+      - SYNCCONTEXT_GEMINI_API_KEY=${SYNCCONTEXT_GEMINI_API_KEY:-}
+      - SYNCCONTEXT_OPENAI_API_KEY=${SYNCCONTEXT_OPENAI_API_KEY:-}
+      - SYNCCONTEXT_OLLAMA_BASE_URL=${SYNCCONTEXT_OLLAMA_BASE_URL:-}
+      - SYNCCONTEXT_OLLAMA_MODEL=${SYNCCONTEXT_OLLAMA_MODEL:-nomic-embed-text}
       # Transport HTTP (Traefik faz o SSL)
       - SYNCCONTEXT_TRANSPORT=streamable-http
       - SYNCCONTEXT_HOST=0.0.0.0

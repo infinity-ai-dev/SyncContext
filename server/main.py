@@ -54,18 +54,24 @@ async def lifespan(server: FastMCP):
     logger.info(f"Active project: {project.name} (id={project.id})")
     logger.info(f"Project token: {project.token[:12]}...{project.token[-4:]}")
 
-    # 4. Initialize embedding provider
-    logger.info(f"Initializing embedding provider: {settings.embedding_provider}...")
+    # 4. Initialize embedding provider (auto-detect from credentials)
+    provider = settings.resolve_embedding_provider()
+    if settings.embedding_provider == "auto":
+        logger.info(f"Embedding provider auto-detected: {provider}")
+    else:
+        logger.info(f"Embedding provider: {provider}")
+
     embedding_kwargs = {}
-    if settings.embedding_provider == "gemini":
+    if provider == "gemini":
         embedding_kwargs["api_key"] = settings.gemini_api_key
-    elif settings.embedding_provider == "openai":
+    elif provider == "openai":
         embedding_kwargs["api_key"] = settings.openai_api_key
-    elif settings.embedding_provider == "ollama":
+    elif provider == "ollama":
         embedding_kwargs["base_url"] = settings.ollama_base_url
         embedding_kwargs["model"] = settings.ollama_model
+        logger.info(f"Ollama endpoint: {settings.ollama_base_url} (model={settings.ollama_model})")
 
-    embeddings = create_embedding_provider(settings.embedding_provider, **embedding_kwargs)
+    embeddings = create_embedding_provider(provider, **embedding_kwargs)
     logger.info(f"Embedding provider ready — dimension={embeddings.dimension}")
 
     # 5. Initialize vector store

@@ -1,27 +1,37 @@
-# SyncContext - Unified Docker Compose
-#
-# Usage:
+# ============================================
+# SyncContext - Docker Compose (local + self-hosted)
+# ============================================
+# Uso:
 #   pgvector (default):  docker compose up -d
-#   Redis Stack:         docker compose --profile redis up -d
-#   Both backends:       docker compose --profile redis up -d
+#   Com Redis:           docker compose --profile redis up -d
 #
-# The synccontext service uses SYNCCONTEXT_VECTOR_STORE env var to choose
-# which backend to use at runtime. Set it in your .env file.
+# Embedding provider é auto-detectado:
+#   - GEMINI_API_KEY preenchida → usa Gemini (default, grátis)
+#   - OPENAI_API_KEY preenchida → usa OpenAI
+#   - OLLAMA_BASE_URL preenchida → usa Ollama (offline)
 
 services:
   synccontext:
     image: infinitytools/synccontext:${SYNCCONTEXT_VERSION:-latest}
     environment:
+      # Auth
       SYNCCONTEXT_PROJECT_TOKEN: ${SYNCCONTEXT_PROJECT_TOKEN:-dev-token}
+      SYNCCONTEXT_ADMIN_TOKEN: ${SYNCCONTEXT_ADMIN_TOKEN:-}
+      # Database
       SYNCCONTEXT_DATABASE_URL: postgresql://synccontext:${POSTGRES_PASSWORD:-synccontext}@postgres:5432/synccontext
+      # Vector Store
       SYNCCONTEXT_VECTOR_STORE: ${SYNCCONTEXT_VECTOR_STORE:-pgvector}
       SYNCCONTEXT_REDIS_URL: redis://redis:6379/0
-      SYNCCONTEXT_EMBEDDING_PROVIDER: ${SYNCCONTEXT_EMBEDDING_PROVIDER:-gemini}
+      # Embedding (auto-detect: preencha a credencial do provider desejado)
+      SYNCCONTEXT_EMBEDDING_PROVIDER: ${SYNCCONTEXT_EMBEDDING_PROVIDER:-auto}
       SYNCCONTEXT_GEMINI_API_KEY: ${SYNCCONTEXT_GEMINI_API_KEY:-}
       SYNCCONTEXT_OPENAI_API_KEY: ${SYNCCONTEXT_OPENAI_API_KEY:-}
-      SYNCCONTEXT_OLLAMA_BASE_URL: ${SYNCCONTEXT_OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      SYNCCONTEXT_OLLAMA_BASE_URL: ${SYNCCONTEXT_OLLAMA_BASE_URL:-}
       SYNCCONTEXT_OLLAMA_MODEL: ${SYNCCONTEXT_OLLAMA_MODEL:-nomic-embed-text}
+      # Transport
       SYNCCONTEXT_TRANSPORT: ${SYNCCONTEXT_TRANSPORT:-stdio}
+      SYNCCONTEXT_HOST: "0.0.0.0"
+      SYNCCONTEXT_PORT: "8080"
       SYNCCONTEXT_LOG_LEVEL: ${SYNCCONTEXT_LOG_LEVEL:-INFO}
     depends_on:
       postgres:
