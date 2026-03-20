@@ -11,7 +11,7 @@ build:
 
 startCommand:
   type: stdio
-  command: python -c "from server.main import main; main()"
+  command: python synccontext
 
 secrets:
   - name: SYNCCONTEXT_DATABASE_URL
