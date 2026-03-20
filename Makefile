@@ -1,34 +1,36 @@
-.PHONY: dev test lint docker-build docker-up docker-down docker-up-redis
+.PHONY: dev test lint docker-build docker-up docker-up-redis docker-down docker-logs docker-pull
 
 # ── Local development ─────────────────────────────────────────────────────────
 
-## dev: Run the MCP server locally with uv (stdio transport)
 dev:
 	uv run synccontext
 
-## test: Run the test suite
 test:
 	uv run pytest tests/ -v
 
-## lint: Run ruff linter and formatter check
 lint:
 	uv run ruff check core/ server/
 	uv run ruff format --check core/ server/
 
+format:
+	uv run ruff format core/ server/
+
 # ── Docker ────────────────────────────────────────────────────────────────────
 
-## docker-build: Build the Docker image locally (current platform)
+docker-pull:
+	docker pull ghcr.io/infinity-ai-dev/synccontext:latest
+
+docker-up:
+	docker compose up -d
+
+docker-up-redis:
+	docker compose --profile redis up -d
+
+docker-down:
+	docker compose --profile redis down
+
+docker-logs:
+	docker compose logs -f synccontext
+
 docker-build:
 	docker build -t synccontext:local .
-
-## docker-up: Start SyncContext + Postgres with docker compose
-docker-up:
-	docker compose up --build
-
-## docker-down: Stop and remove all containers
-docker-down:
-	docker compose down
-
-## docker-up-redis: Start SyncContext + Postgres + Redis (Redis vector store)
-docker-up-redis:
-	docker compose -f docker-compose.yml -f docker-compose.redis.yml up --build

@@ -56,7 +56,8 @@ uv run synccontext
 ### With Redis (alternative vector store)
 
 ```bash
-docker compose -f docker-compose.yml -f docker-compose.redis.yml up -d
+# Set SYNCCONTEXT_VECTOR_STORE=redis in your .env, then:
+docker compose --profile redis up -d
 ```
 
 ---

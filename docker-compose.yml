@@ -1,15 +1,26 @@
+# SyncContext - Unified Docker Compose
+#
+# Usage:
+#   pgvector (default):  docker compose up -d
+#   Redis Stack:         docker compose --profile redis up -d
+#   Both backends:       docker compose --profile redis up -d
+#
+# The synccontext service uses SYNCCONTEXT_VECTOR_STORE env var to choose
+# which backend to use at runtime. Set it in your .env file.
+
 services:
   synccontext:
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: ghcr.io/infinity-ai-dev/synccontext:${SYNCCONTEXT_VERSION:-latest}
     environment:
       SYNCCONTEXT_PROJECT_TOKEN: ${SYNCCONTEXT_PROJECT_TOKEN:-dev-token}
-      SYNCCONTEXT_DATABASE_URL: postgresql://synccontext:synccontext@postgres:5432/synccontext
+      SYNCCONTEXT_DATABASE_URL: postgresql://synccontext:${POSTGRES_PASSWORD:-synccontext}@postgres:5432/synccontext
+      SYNCCONTEXT_VECTOR_STORE: ${SYNCCONTEXT_VECTOR_STORE:-pgvector}
+      SYNCCONTEXT_REDIS_URL: redis://redis:6379/0
       SYNCCONTEXT_EMBEDDING_PROVIDER: ${SYNCCONTEXT_EMBEDDING_PROVIDER:-gemini}
       SYNCCONTEXT_GEMINI_API_KEY: ${SYNCCONTEXT_GEMINI_API_KEY:-}
       SYNCCONTEXT_OPENAI_API_KEY: ${SYNCCONTEXT_OPENAI_API_KEY:-}
-      SYNCCONTEXT_VECTOR_STORE: pgvector
+      SYNCCONTEXT_OLLAMA_BASE_URL: ${SYNCCONTEXT_OLLAMA_BASE_URL:-http://host.docker.internal:11434}
+      SYNCCONTEXT_OLLAMA_MODEL: ${SYNCCONTEXT_OLLAMA_MODEL:-nomic-embed-text}
       SYNCCONTEXT_TRANSPORT: ${SYNCCONTEXT_TRANSPORT:-stdio}
       SYNCCONTEXT_LOG_LEVEL: ${SYNCCONTEXT_LOG_LEVEL:-INFO}
     depends_on:
@@ -25,9 +36,6 @@ services:
           memory: 128M
     networks:
       - synccontext-net
-    # SyncContext is a long-running MCP process; there is no HTTP endpoint to
-    # probe by default (stdio transport). The healthcheck below verifies that
-    # the Python interpreter and the installed package are intact.
     healthcheck:
       test: ["CMD", "python", "-c", "import server.main"]
       interval: 30s
@@ -39,12 +47,12 @@ services:
     image: pgvector/pgvector:pg17
     environment:
       POSTGRES_USER: synccontext
-      POSTGRES_PASSWORD: synccontext
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-synccontext}
       POSTGRES_DB: synccontext
     volumes:
       - pgdata:/var/lib/postgresql/data
     ports:
-      - "5432:5432"
+      - "${POSTGRES_PORT:-5432}:5432"
     restart: unless-stopped
     deploy:
       resources:
@@ -61,8 +69,35 @@ services:
       retries: 5
       start_period: 10s
 
+  redis:
+    image: redis/redis-stack:latest
+    command: redis-server --appendonly yes
+    profiles:
+      - redis
+    ports:
+      - "${REDIS_PORT:-6379}:6379"
+    volumes:
+      - redisdata:/data
+    restart: unless-stopped
+    deploy:
+      resources:
+        limits:
+          memory: 512M
+        reservations:
+          memory: 128M
+    networks:
+      - synccontext-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
 volumes:
   pgdata:
+    driver: local
+  redisdata:
     driver: local
 
 networks:
