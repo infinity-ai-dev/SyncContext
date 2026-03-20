@@ -41,7 +41,8 @@ LABEL org.opencontainers.image.title="SyncContext" \
       org.opencontainers.image.licenses="MIT" \
       org.opencontainers.image.source="https://github.com/infinity-ai-dev/SyncContext"
 
-RUN groupadd --gid 1001 appgroup && \
+RUN apt-get update && apt-get install -y --no-install-recommends curl && rm -rf /var/lib/apt/lists/* && \
+    groupadd --gid 1001 appgroup && \
     useradd --uid 1001 --gid appgroup --shell /bin/false --no-create-home appuser
 
 WORKDIR /app

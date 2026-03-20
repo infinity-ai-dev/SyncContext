@@ -4,8 +4,7 @@ version: "3.7"
 # SyncContext - Docker Compose
 # ============================================
 # Uso:
-#   pgvector (default):  docker compose up -d
-#   Com Redis:           docker compose --profile redis up -d
+#   docker compose up -d
 #
 # Embedding provider é auto-detectado:
 #   - GEMINI_API_KEY preenchida → usa Gemini (default, grátis)
@@ -42,8 +41,14 @@ services:
       # Transport HTTP (Traefik faz o SSL)
       - SYNCCONTEXT_TRANSPORT=streamable-http
       - SYNCCONTEXT_HOST=0.0.0.0
-      - SYNCCONTEXT_PORT=8080
+      - SYNCCONTEXT_PORT=9002
       - SYNCCONTEXT_LOG_LEVEL=INFO
+    healthcheck:
+      test: ["CMD", "curl", "-sf", "http://localhost:9002/mcp"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 30s
     deploy:
       mode: replicated
       replicas: 1
@@ -62,7 +67,7 @@ services:
         - traefik.http.routers.synccontext.entrypoints=websecure
         - traefik.http.routers.synccontext.tls.certresolver=letsencryptresolver
         - traefik.http.routers.synccontext.service=synccontext
-        - traefik.http.services.synccontext.loadbalancer.server.port=8080
+        - traefik.http.services.synccontext.loadbalancer.server.port=9002
         - traefik.http.services.synccontext.loadbalancer.passHostHeader=true
       update_config:
         parallelism: 1
