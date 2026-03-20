@@ -7,11 +7,11 @@ runtime: python
 entry: server/main.py
 
 build:
-  install: uv sync --frozen --no-dev
+  install: pip install .
 
 startCommand:
   type: stdio
-  command: uv run synccontext
+  command: synccontext
 
 secrets:
   - name: SYNCCONTEXT_DATABASE_URL
