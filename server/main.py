@@ -26,26 +26,36 @@ async def lifespan(server: FastMCP):
         format="%(asctime)s [%(name)s] %(levelname)s: %(message)s",
     )
     logger = logging.getLogger("synccontext")
-    logger.info("Starting SyncContext MCP server...")
-    logger.info(f"Transport: {settings.transport} | Host: {settings.host}:{settings.port}")
+
+    logger.info("=" * 50)
+    logger.info("SyncContext MCP Server — Starting up")
+    logger.info("=" * 50)
+    logger.info(f"Transport: {settings.transport}")
+    if settings.transport != "stdio":
+        logger.info(f"Listening: {settings.host}:{settings.port}")
 
     # 1. Connect to PostgreSQL
+    logger.info("Connecting to PostgreSQL...")
     pool = await asyncpg.create_pool(settings.database_url, min_size=2, max_size=10)
-    logger.info("PostgreSQL connected")
+    version = await pool.fetchval("SELECT version()")
+    logger.info(f"Database connected — {version.split(',')[0]}")
 
     # 2. Run migrations
+    logger.info("Executing migrations...")
     await run_migrations(pool)
-    logger.info("Migrations applied")
 
     # 3. Initialize auth and resolve project
+    logger.info("Initializing authentication...")
     token_auth = TokenAuth(pool)
     project = await token_auth.ensure_project(
         token=settings.project_token,
         name="Default Project",
     )
-    logger.info(f"Active project: {project.name} ({project.id})")
+    logger.info(f"Active project: {project.name} (id={project.id})")
+    logger.info(f"Project token: {project.token[:12]}...{project.token[-4:]}")
 
     # 4. Initialize embedding provider
+    logger.info(f"Initializing embedding provider: {settings.embedding_provider}...")
     embedding_kwargs = {}
     if settings.embedding_provider == "gemini":
         embedding_kwargs["api_key"] = settings.gemini_api_key
@@ -56,9 +66,10 @@ async def lifespan(server: FastMCP):
         embedding_kwargs["model"] = settings.ollama_model
 
     embeddings = create_embedding_provider(settings.embedding_provider, **embedding_kwargs)
-    logger.info(f"Embedding provider: {settings.embedding_provider} (dim={embeddings.dimension})")
+    logger.info(f"Embedding provider ready — dimension={embeddings.dimension}")
 
     # 5. Initialize vector store
+    logger.info(f"Initializing vector store: {settings.vector_store}...")
     vector_store = create_vector_store(
         settings.vector_store,
         database_url=settings.database_url,
@@ -66,12 +77,15 @@ async def lifespan(server: FastMCP):
         dimension=embeddings.dimension,
     )
     await vector_store.initialize()
-    logger.info(f"Vector store: {settings.vector_store}")
+    logger.info(f"Vector store ready — backend={settings.vector_store}")
 
     # 6. Create services scoped to the active project
     memory_service = MemoryService(pool, vector_store, embeddings, project.id)
     search_service = SearchService(memory_service, vector_store, embeddings, project.id)
-    logger.info("SyncContext ready")
+
+    logger.info("=" * 50)
+    logger.info("SyncContext ready — all systems operational")
+    logger.info("=" * 50)
 
     # 7. Yield context to tool handlers
     yield {
@@ -87,7 +101,7 @@ async def lifespan(server: FastMCP):
     await embeddings.close()
     await vector_store.close()
     await pool.close()
-    logger.info("Shutdown complete")
+    logger.info("Shutdown complete — goodbye")
 
 
 mcp = FastMCP(
