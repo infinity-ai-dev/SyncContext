@@ -1,0 +1,50 @@
+version: 1
+name: synccontext
+description: |
+  Shared team memory for AI coding agents. SyncContext gives your team a shared brain —
+  when one developer saves an architecture decision, a bug fix pattern, or a coding convention,
+  every other team member's AI agent instantly has access to it via semantic search.
+
+  Features:
+  - 14 MCP tools (save, search, list, update, delete, bulk, find similar, and more)
+  - Semantic search powered by pgvector (PostgreSQL)
+  - Multi-project isolation with per-token namespacing
+  - Auto-detect embedding provider (Gemini free, OpenAI, Ollama offline)
+  - Auto-create projects on first connection
+  - Docker multi-arch (amd64 + arm64)
+
+runtime: container
+entry: infinitytools/synccontext:latest
+
+startCommand:
+  type: http
+  command: synccontext
+
+secrets:
+  - name: SYNCCONTEXT_GEMINI_API_KEY
+    required: false
+    description: "Gemini API key for embeddings (free tier). Get one at https://aistudio.google.com/apikey"
+
+  - name: SYNCCONTEXT_OPENAI_API_KEY
+    required: false
+    description: "OpenAI API key for embeddings (paid). Alternative to Gemini."
+
+  - name: SYNCCONTEXT_OLLAMA_BASE_URL
+    required: false
+    description: "Ollama server URL for offline embeddings. E.g. http://localhost:11434"
+
+credentials:
+  - name: SYNCCONTEXT_PROJECT_TOKEN
+    required: true
+    description: "Your project token. All team members using the same token share the same memories."
+    mapping:
+      env: SYNCCONTEXT_PROJECT_TOKEN
+      header: "Authorization: Bearer {{value}}"
+
+  - name: SYNCCONTEXT_PROJECT_NAME
+    required: false
+    description: "Project display name (auto-created on first connection)."
+    mapping:
+      header: "X-Project-Name: {{value}}"
+
+credentials_mode: per_user
