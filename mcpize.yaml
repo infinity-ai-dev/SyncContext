@@ -1,26 +1,27 @@
 version: 1
 name: synccontext
 description: |
-  Shared team memory for AI coding agents. SyncContext gives your team a shared brain —
-  when one developer saves an architecture decision, a bug fix pattern, or a coding convention,
-  every other team member's AI agent instantly has access to it via semantic search.
-
-  Features:
-  - 14 MCP tools (save, search, list, update, delete, bulk, find similar, and more)
-  - Semantic search powered by pgvector (PostgreSQL)
-  - Multi-project isolation with per-token namespacing
-  - Auto-detect embedding provider (Gemini free, OpenAI, Ollama offline)
-  - Auto-create projects on first connection
-  - Docker multi-arch (amd64 + arm64)
+  Shared team memory for AI coding agents. Save architecture decisions, patterns, and conventions — every team member's AI agent gets instant access via semantic search. 14 tools, multi-project isolation, pgvector, auto-detect embeddings (Gemini/OpenAI/Ollama).
 
 runtime: container
 entry: infinitytools/synccontext:latest
 
 startCommand:
-  type: http
+  type: stdio
   command: synccontext
 
+bridge:
+  mode: stdio
+
 secrets:
+  - name: SYNCCONTEXT_DATABASE_URL
+    required: true
+    description: "PostgreSQL connection string with pgvector enabled. Required for server startup."
+
+  - name: SYNCCONTEXT_DIRECT_URL
+    required: false
+    description: "Direct PostgreSQL connection used for migrations/DDL when DATABASE_URL points to a pooler."
+
   - name: SYNCCONTEXT_GEMINI_API_KEY
     required: false
     description: "Gemini API key for embeddings (free tier). Get one at https://aistudio.google.com/apikey"
@@ -33,18 +34,10 @@ secrets:
     required: false
     description: "Ollama server URL for offline embeddings. E.g. http://localhost:11434"
 
-credentials:
   - name: SYNCCONTEXT_PROJECT_TOKEN
     required: true
-    description: "Your project token. All team members using the same token share the same memories."
-    mapping:
-      env: SYNCCONTEXT_PROJECT_TOKEN
-      header: "Authorization: Bearer {{value}}"
+    description: "Shared project token used by the hosted MCPize deployment."
 
   - name: SYNCCONTEXT_PROJECT_NAME
     required: false
-    description: "Project display name (auto-created on first connection)."
-    mapping:
-      header: "X-Project-Name: {{value}}"
-
-credentials_mode: per_user
+    description: "Shared project display name used when the hosted deployment auto-creates the project."

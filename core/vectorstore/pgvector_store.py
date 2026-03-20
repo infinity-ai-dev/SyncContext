@@ -4,51 +4,67 @@ from uuid import UUID
 import asyncpg
 from pgvector.asyncpg import register_vector
 
+from core.db import connection_kwargs_from_url
 from core.vectorstore.base import VectorStore
 
 
 class PgVectorStore(VectorStore):
     """PostgreSQL + pgvector backend with HNSW indexing."""
 
-    def __init__(self, database_url: str, dimension: int = 768):
+    def __init__(self, database_url: str, dimension: int = 768, direct_url: str | None = None):
         self._database_url = database_url
         self._dimension = dimension
+        self._direct_url = direct_url
         self._pool: asyncpg.Pool | None = None
 
     async def initialize(self) -> None:
+        ddl_url = self._direct_url or self._database_url
+        if ddl_url != self._database_url:
+            conn = await asyncpg.connect(ddl_url, **connection_kwargs_from_url(ddl_url))
+            try:
+                await self._init_connection(conn)
+                await self._ensure_schema(conn)
+            finally:
+                await conn.close()
+
         self._pool = await asyncpg.create_pool(
             self._database_url,
             min_size=2,
             max_size=10,
             init=self._init_connection,
+            **connection_kwargs_from_url(self._database_url),
         )
         async with self._pool.acquire() as conn:
-            await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
-            await conn.execute(f"""
-                CREATE TABLE IF NOT EXISTS memory_vectors (
-                    id UUID PRIMARY KEY,
-                    embedding vector({self._dimension}),
-                    project_token VARCHAR(255) NOT NULL DEFAULT '',
-                    project_id UUID,
-                    metadata JSONB DEFAULT '{{}}'::jsonb
-                )
-            """)
-            await conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_memory_vectors_embedding
-                ON memory_vectors USING hnsw (embedding vector_cosine_ops)
-                WITH (m = 16, ef_construction = 64)
-            """)
-            await conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_memory_vectors_project
-                ON memory_vectors(project_token)
-            """)
-            await conn.execute("""
-                CREATE INDEX IF NOT EXISTS idx_memory_vectors_project_id
-                ON memory_vectors(project_id)
-            """)
+            if ddl_url == self._database_url:
+                await self._ensure_schema(conn)
 
     async def _init_connection(self, conn: asyncpg.Connection) -> None:
         await register_vector(conn)
+
+    async def _ensure_schema(self, conn: asyncpg.Connection) -> None:
+        await conn.execute("CREATE EXTENSION IF NOT EXISTS vector")
+        await conn.execute(f"""
+            CREATE TABLE IF NOT EXISTS memory_vectors (
+                id UUID PRIMARY KEY,
+                embedding vector({self._dimension}),
+                project_token VARCHAR(255) NOT NULL DEFAULT '',
+                project_id UUID,
+                metadata JSONB DEFAULT '{{}}'::jsonb
+            )
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_memory_vectors_embedding
+            ON memory_vectors USING hnsw (embedding vector_cosine_ops)
+            WITH (m = 16, ef_construction = 64)
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_memory_vectors_project
+            ON memory_vectors(project_token)
+        """)
+        await conn.execute("""
+            CREATE INDEX IF NOT EXISTS idx_memory_vectors_project_id
+            ON memory_vectors(project_id)
+        """)
 
     async def upsert(self, id: UUID, vector: list[float], metadata: dict) -> None:
         project_id = metadata.pop("project_id", None)

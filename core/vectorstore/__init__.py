@@ -10,6 +10,7 @@ def create_vector_store(backend: str, **kwargs) -> VectorStore:
             return PgVectorStore(
                 database_url=kwargs["database_url"],
                 dimension=kwargs.get("dimension", 768),
+                direct_url=kwargs.get("direct_url"),
             )
         case "redis":
             from core.vectorstore.redis_store import RedisVectorStore

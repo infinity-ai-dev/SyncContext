@@ -1,9 +1,13 @@
-from typing import Literal
+from typing import ClassVar, Literal
 
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
+from core.db import unique_urls
+
 
 class Settings(BaseSettings):
+    DEFAULT_PROJECT_TOKEN: ClassVar[str] = "default-dev-token"
+
     model_config = SettingsConfigDict(
         env_prefix="SYNCCONTEXT_",
         env_file=".env",
@@ -11,11 +15,14 @@ class Settings(BaseSettings):
     )
 
     # Auth
-    project_token: str = "default-dev-token"
+    project_token: str = DEFAULT_PROJECT_TOKEN
+    project_name: str = "Default Project"
     admin_token: str | None = None
 
     # PostgreSQL (always required for metadata)
     database_url: str = "postgresql://synccontext:password@localhost:5432/synccontext"
+    local_database_url: str | None = "postgresql://postgres:7y8auHScpUTrQWhjbrlu8yc0RzNib2wn@postgres:5432/synccontext"
+    direct_url: str | None = None
 
     # Vector store selection
     vector_store: Literal["pgvector", "redis"] = "pgvector"
@@ -52,4 +59,22 @@ class Settings(BaseSettings):
         if self.gemini_api_key:
             return "gemini"
 
-        return "gemini"  # fallback
+        raise ValueError(
+            "No embedding provider credentials detected. "
+            "Set SYNCCONTEXT_OLLAMA_BASE_URL, SYNCCONTEXT_OPENAI_API_KEY, "
+            "or SYNCCONTEXT_GEMINI_API_KEY."
+        )
+
+    def has_shared_project_token(self) -> bool:
+        """Return True when a non-default shared project token is configured."""
+        return self.project_token != self.DEFAULT_PROJECT_TOKEN
+
+    def database_candidates(self) -> list[str]:
+        """Return database DSNs in fallback order."""
+        return unique_urls([self.local_database_url, self.database_url])
+
+    def resolve_migration_url(self, runtime_database_url: str | None = None) -> str:
+        """Prefer a direct connection for migrations when runtime uses a pooler."""
+        if runtime_database_url and runtime_database_url == self.local_database_url:
+            return runtime_database_url
+        return self.direct_url or runtime_database_url or self.database_url

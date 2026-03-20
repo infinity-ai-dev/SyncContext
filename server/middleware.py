@@ -1,11 +1,13 @@
 """Starlette middleware for per-request project authentication.
 
-Extracts the Bearer token from the Authorization header and
-resolves/creates the project in the database. Stores the project
-in a contextvar so tool handlers can access it.
+Extracts the project token from ``x-project-token`` or ``Authorization``.
+When a shared project token is configured for hosted MCPize deployments,
+it is used as a fallback so capability discovery and calls can succeed
+without per-user credential injection.
 """
 
 import logging
+import json
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
@@ -15,33 +17,43 @@ from core.auth import TokenAuth
 from server.context import current_project
 
 logger = logging.getLogger("synccontext.middleware")
+DISCOVERY_METHODS = {"initialize", "tools/list", "resources/list", "prompts/list"}
+DISCOVERY_PATHS = {"/", "/mcp", "/sse", "/ping"}
 
 
 class ProjectAuthMiddleware(BaseHTTPMiddleware):
     """Resolve project from Bearer token on every HTTP request."""
 
-    def __init__(self, app, token_auth: TokenAuth):
+    def __init__(
+        self,
+        app,
+        token_auth: TokenAuth,
+        fallback_project_token: str | None = None,
+        fallback_project_name: str = "",
+    ):
         super().__init__(app)
         self._token_auth = token_auth
+        self._fallback_project_token = (fallback_project_token or "").strip()
+        self._fallback_project_name = fallback_project_name
 
     async def dispatch(self, request: Request, call_next):
-        # Extract Bearer token
-        auth_header = request.headers.get("authorization", "")
-        if not auth_header.startswith("Bearer "):
-            return JSONResponse(
-                {"error": "Missing or invalid Authorization header. Use: Bearer <token>"},
-                status_code=401,
-            )
+        if await self._is_discovery_request(request):
+            return await call_next(request)
 
-        token = auth_header.removeprefix("Bearer ").strip()
+        token = self._extract_project_token(request)
         if not token:
             return JSONResponse(
-                {"error": "Empty token"},
+                {
+                    "error": (
+                        "Missing project token. Use header "
+                        "x-project-token: <token> or Authorization: Bearer <token>"
+                    )
+                },
                 status_code=401,
             )
 
         # Extract optional project name from header (used on first connection)
-        project_name = request.headers.get("x-project-name", "")
+        project_name = request.headers.get("x-project-name", "").strip() or self._fallback_project_name
 
         # Resolve project: look up token in DB, auto-create if new
         project = await self._token_auth.validate_token(token)
@@ -68,3 +80,48 @@ class ProjectAuthMiddleware(BaseHTTPMiddleware):
             return response
         finally:
             current_project.reset(ctx_token)
+
+    def _extract_project_token(self, request: Request) -> str:
+        """Prefer explicit header, then shared fallback, then Authorization."""
+        project_token = request.headers.get("x-project-token", "").strip()
+        if project_token:
+            return project_token
+
+        if self._fallback_project_token:
+            return self._fallback_project_token
+
+        auth_header = request.headers.get("authorization", "")
+        if auth_header.startswith("Bearer "):
+            return auth_header.removeprefix("Bearer ").strip()
+
+        return ""
+
+    async def _is_discovery_request(self, request: Request) -> bool:
+        """Allow MCP capability discovery requests without project auth."""
+        if request.method == "GET" and request.url.path in DISCOVERY_PATHS:
+            return True
+
+        if request.method != "POST" or request.url.path not in {"/", "/mcp"}:
+            return False
+
+        body = await request.body()
+        self._restore_body(request, body)
+
+        if not body:
+            return False
+
+        try:
+            payload = json.loads(body)
+        except json.JSONDecodeError:
+            return False
+
+        return payload.get("method") in DISCOVERY_METHODS
+
+    @staticmethod
+    def _restore_body(request: Request, body: bytes) -> None:
+        """Replay the consumed request body so downstream handlers can read it."""
+
+        async def receive() -> dict:
+            return {"type": "http.request", "body": body, "more_body": False}
+
+        request._receive = receive

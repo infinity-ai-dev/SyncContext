@@ -5,6 +5,7 @@ import asyncpg
 from mcp.server.fastmcp import FastMCP
 
 from core.auth import TokenAuth
+from core.db import connection_kwargs_from_url, redact_database_url
 from core.embeddings import create_embedding_provider
 from core.migrations import run_migrations
 from core.vectorstore import create_vector_store
@@ -34,25 +35,42 @@ async def lifespan(server: FastMCP):
 
     # 1. Connect to PostgreSQL
     logger.info("Connecting to PostgreSQL...")
-    pool = await asyncpg.create_pool(settings.database_url, min_size=2, max_size=10)
+    pool, runtime_database_url = await _create_database_pool(settings, logger)
     version = await pool.fetchval("SELECT version()")
     logger.info(f"Database connected — {version.split(',')[0]}")
 
     # 2. Run migrations
-    logger.info("Executing migrations...")
-    await run_migrations(pool)
+    migration_database_url = settings.resolve_migration_url(runtime_database_url)
+    if migration_database_url == runtime_database_url:
+        logger.info("Executing migrations...")
+        await run_migrations(pool)
+    else:
+        logger.info("Executing migrations via direct database connection...")
+        migration_pool = await asyncpg.create_pool(
+            migration_database_url,
+            min_size=1,
+            max_size=2,
+            **connection_kwargs_from_url(migration_database_url),
+        )
+        try:
+            await run_migrations(migration_pool)
+        finally:
+            await migration_pool.close()
 
     # 3. Initialize auth
     logger.info("Initializing authentication...")
     token_auth = TokenAuth(pool)
 
-    # For stdio transport, resolve project from env var (backward compat)
-    if settings.transport == "stdio" and settings.project_token != "default-dev-token":
+    # When a shared project token is configured, ensure it exists on startup.
+    if settings.has_shared_project_token():
         project = await token_auth.ensure_project(
             token=settings.project_token,
-            name="Default Project",
+            name=settings.project_name,
         )
-        logger.info(f"Stdio project: {project.name} (id={project.id})")
+        if settings.transport == "stdio":
+            logger.info(f"Stdio project: {project.name} (id={project.id})")
+        else:
+            logger.info(f"Shared HTTP project: {project.name} (id={project.id})")
 
     # 4. Initialize embedding provider
     provider = settings.resolve_embedding_provider()
@@ -78,9 +96,10 @@ async def lifespan(server: FastMCP):
     logger.info(f"Initializing vector store: {settings.vector_store}...")
     vector_store = create_vector_store(
         settings.vector_store,
-        database_url=settings.database_url,
+        database_url=runtime_database_url,
         redis_url=settings.redis_url,
         dimension=embeddings.dimension,
+        direct_url=migration_database_url,
     )
     await vector_store.initialize()
     logger.info(f"Vector store ready — backend={settings.vector_store}")
@@ -88,7 +107,10 @@ async def lifespan(server: FastMCP):
     logger.info("=" * 50)
     logger.info("SyncContext ready — all systems operational")
     if settings.transport != "stdio":
-        logger.info("Projects are resolved per-request from Authorization header")
+        if settings.has_shared_project_token():
+            logger.info("HTTP requests without x-project-token will use the shared project token")
+        else:
+            logger.info("Projects are resolved per-request from x-project-token or Authorization")
     logger.info("=" * 50)
 
     # 6. Yield shared resources (NOT project-specific services)
@@ -107,6 +129,29 @@ async def lifespan(server: FastMCP):
     await vector_store.close()
     await pool.close()
     logger.info("Shutdown complete — goodbye")
+
+
+async def _create_database_pool(settings: Settings, logger: logging.Logger) -> tuple[asyncpg.Pool, str]:
+    """Connect to the first reachable database DSN in fallback order."""
+    errors: list[str] = []
+
+    for database_url in settings.database_candidates():
+        safe_url = redact_database_url(database_url)
+        try:
+            logger.info(f"Trying database: {safe_url}")
+            pool = await asyncpg.create_pool(
+                database_url,
+                min_size=2,
+                max_size=10,
+                **connection_kwargs_from_url(database_url),
+            )
+            logger.info(f"Database selected: {safe_url}")
+            return pool, database_url
+        except Exception as exc:
+            logger.warning(f"Database unavailable: {safe_url} ({exc})")
+            errors.append(f"{safe_url} -> {exc}")
+
+    raise RuntimeError("Unable to connect to any configured database URL: " + " | ".join(errors))
 
 
 mcp = FastMCP(
@@ -137,7 +182,12 @@ def main():
         app = mcp.streamable_http_app()
         # Middleware needs token_auth, which is created in lifespan.
         # We pass a lazy reference that gets resolved after lifespan starts.
-        app.add_middleware(ProjectAuthMiddleware, token_auth=_LazyTokenAuth())
+        app.add_middleware(
+            ProjectAuthMiddleware,
+            token_auth=_LazyTokenAuth(),
+            fallback_project_token=settings.project_token if settings.has_shared_project_token() else None,
+            fallback_project_name=settings.project_name if settings.has_shared_project_token() else "",
+        )
 
         config = uvicorn.Config(
             app,

@@ -30,6 +30,15 @@ def test_pgvector_custom_dimension():
     assert store._dimension == 1536
 
 
+def test_pgvector_direct_url_is_stored():
+    store = create_vector_store(
+        "pgvector",
+        database_url="postgresql://pooler/test",
+        direct_url="postgresql://direct/test",
+    )
+    assert store._direct_url == "postgresql://direct/test"
+
+
 def test_redis_default_dimension():
     store = create_vector_store("redis", redis_url="redis://localhost:6379/0")
     assert store._dimension == 768
