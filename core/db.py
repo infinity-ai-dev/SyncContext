@@ -1,5 +1,5 @@
 from collections.abc import Iterable
-from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
+from urllib.parse import parse_qsl, urlparse, urlunparse
 
 
 def connection_kwargs_from_url(url: str) -> dict:

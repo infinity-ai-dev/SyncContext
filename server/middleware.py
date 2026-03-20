@@ -53,8 +53,7 @@ class ProjectAuthMiddleware:
             response = JSONResponse(
                 {
                     "error": (
-                        "Missing project token. Use header "
-                        "x-project-token: <token> or Authorization: Bearer <token>"
+                        "Missing project token. Use header x-project-token: <token> or Authorization: Bearer <token>"
                     )
                 },
                 status_code=401,

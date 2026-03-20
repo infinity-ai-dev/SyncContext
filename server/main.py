@@ -3,6 +3,10 @@ from contextlib import asynccontextmanager
 
 import asyncpg
 from mcp.server.fastmcp import FastMCP
+from starlette.applications import Starlette
+from starlette.requests import Request
+from starlette.responses import JSONResponse
+from starlette.routing import Mount, Route
 
 from core.auth import TokenAuth
 from core.db import connection_kwargs_from_url, redact_database_url
@@ -173,6 +177,33 @@ mcp = FastMCP(
 register_tools(mcp)
 
 
+async def _ping(_request: Request) -> JSONResponse:
+    """Health check used by hosted platforms such as Cloud Run/MCPize."""
+    return JSONResponse({"status": "ok"})
+
+
+def build_http_app(settings: Settings, mcp_http_app=None) -> Starlette:
+    """Wrap the MCP HTTP app with health and auth routes."""
+    from server.middleware import ProjectAuthMiddleware
+
+    if mcp_http_app is None:
+        mcp_http_app = mcp.streamable_http_app()
+
+    app = Starlette(
+        routes=[
+            Route("/ping", _ping, methods=["GET"]),
+            Mount("/", app=mcp_http_app),
+        ]
+    )
+    app.add_middleware(
+        ProjectAuthMiddleware,
+        token_auth=_RuntimeTokenAuth(),
+        fallback_project_token=settings.project_token if settings.has_shared_project_token() else None,
+        fallback_project_name=settings.project_name if settings.has_shared_project_token() else "",
+    )
+    return app
+
+
 def main():
     settings = _settings
 
@@ -180,17 +211,7 @@ def main():
         # For HTTP transports, wrap the app with auth middleware
         import uvicorn
 
-        from server.middleware import ProjectAuthMiddleware
-
-        app = mcp.streamable_http_app()
-        # Middleware needs token_auth, which is created in lifespan.
-        # We pass a lazy reference that gets resolved after lifespan starts.
-        app.add_middleware(
-            ProjectAuthMiddleware,
-            token_auth=_RuntimeTokenAuth(),
-            fallback_project_token=settings.project_token if settings.has_shared_project_token() else None,
-            fallback_project_name=settings.project_name if settings.has_shared_project_token() else "",
-        )
+        app = build_http_app(settings)
 
         config = uvicorn.Config(
             app,
