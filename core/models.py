@@ -4,11 +4,26 @@ from uuid import UUID, uuid4
 from pydantic import BaseModel, Field
 
 
+class Project(BaseModel):
+    """A project namespace with its own token and settings."""
+
+    id: UUID = Field(default_factory=uuid4)
+    name: str
+    token: str
+    description: str | None = None
+    embedding_provider: str = "gemini"
+    embedding_dimension: int = 768
+    is_active: bool = True
+    max_memories: int | None = None
+    created_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+    updated_at: datetime = Field(default_factory=lambda: datetime.now(UTC))
+
+
 class Memory(BaseModel):
     """A single memory/context entry."""
 
     id: UUID = Field(default_factory=uuid4)
-    project_token: str
+    project_id: UUID
     content: str
     author: str | None = None
     tags: list[str] = Field(default_factory=list)

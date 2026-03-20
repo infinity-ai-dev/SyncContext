@@ -17,12 +17,12 @@ class SearchService:
         memory_service: MemoryService,
         vector_store: VectorStore,
         embedding_provider: EmbeddingProvider,
-        project_token: str,
+        project_id: UUID,
     ):
         self._memory_service = memory_service
         self._vector_store = vector_store
         self._embeddings = embedding_provider
-        self._project_token = project_token
+        self._project_id = project_id
 
     async def search(
         self,
@@ -40,7 +40,7 @@ class SearchService:
         vector_results = await self._vector_store.search(
             query_vector=query_vector,
             top_k=top_k * 2,  # Fetch extra to compensate for post-filtering
-            filter_metadata={"project_token": self._project_token},
+            filter_metadata={"project_id": str(self._project_id)},
         )
 
         # 3. Fetch full memory metadata and apply filters
@@ -87,7 +87,7 @@ class SearchService:
         vector_results = await self._vector_store.search(
             query_vector=query_vector,
             top_k=top_k * 2 + 1,  # +1 to account for the source memory itself
-            filter_metadata={"project_token": self._project_token},
+            filter_metadata={"project_id": str(self._project_id)},
         )
 
         results = []

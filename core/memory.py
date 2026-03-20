@@ -19,12 +19,12 @@ class MemoryService:
         db_pool: asyncpg.Pool,
         vector_store: VectorStore,
         embedding_provider: EmbeddingProvider,
-        project_token: str,
+        project_id: UUID,
     ):
         self._pool = db_pool
         self._vector_store = vector_store
         self._embeddings = embedding_provider
-        self._project_token = project_token
+        self._project_id = project_id
 
     async def save_memory(self, data: MemoryCreate) -> Memory:
         """Save a new memory with its embedding."""
@@ -39,11 +39,12 @@ class MemoryService:
             await conn.execute(
                 """
                 INSERT INTO memories
-                    (id, project_token, content, author, tags, file_path, memory_type, created_at, updated_at)
-                VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+                    (id, project_id, project_token, content, author,
+                     tags, file_path, memory_type, created_at, updated_at)
+                VALUES ($1, $2, '', $3, $4, $5, $6, $7, $8, $9)
                 """,
                 memory_id,
-                self._project_token,
+                self._project_id,
                 data.content,
                 data.author,
                 data.tags,
@@ -57,13 +58,13 @@ class MemoryService:
         await self._vector_store.upsert(
             id=memory_id,
             vector=embedding,
-            metadata={"project_token": self._project_token},
+            metadata={"project_id": str(self._project_id)},
         )
 
         logger.info(f"Memory saved: {memory_id}")
         return Memory(
             id=memory_id,
-            project_token=self._project_token,
+            project_id=self._project_id,
             content=data.content,
             author=data.author,
             tags=data.tags,
@@ -77,9 +78,9 @@ class MemoryService:
         """Get a single memory by ID."""
         async with self._pool.acquire() as conn:
             row = await conn.fetchrow(
-                "SELECT * FROM memories WHERE id = $1 AND project_token = $2",
+                "SELECT * FROM memories WHERE id = $1 AND project_id = $2",
                 memory_id,
-                self._project_token,
+                self._project_id,
             )
         if not row:
             return None
@@ -103,7 +104,7 @@ class MemoryService:
                 """
                 UPDATE memories
                 SET content = $1, tags = $2, file_path = $3, memory_type = $4, updated_at = $5
-                WHERE id = $6 AND project_token = $7
+                WHERE id = $6 AND project_id = $7
                 """,
                 new_content,
                 new_tags,
@@ -111,7 +112,7 @@ class MemoryService:
                 new_memory_type,
                 now,
                 memory_id,
-                self._project_token,
+                self._project_id,
             )
 
         # Re-embed if content changed
@@ -120,13 +121,13 @@ class MemoryService:
             await self._vector_store.upsert(
                 id=memory_id,
                 vector=embedding,
-                metadata={"project_token": self._project_token},
+                metadata={"project_id": str(self._project_id)},
             )
 
         logger.info(f"Memory updated: {memory_id}")
         return Memory(
             id=memory_id,
-            project_token=self._project_token,
+            project_id=self._project_id,
             content=new_content,
             author=existing.author,
             tags=new_tags,
@@ -140,9 +141,9 @@ class MemoryService:
         """Delete a memory and its vector."""
         async with self._pool.acquire() as conn:
             result = await conn.execute(
-                "DELETE FROM memories WHERE id = $1 AND project_token = $2",
+                "DELETE FROM memories WHERE id = $1 AND project_id = $2",
                 memory_id,
-                self._project_token,
+                self._project_id,
             )
 
         if result == "DELETE 1":
@@ -160,8 +161,8 @@ class MemoryService:
         memory_type: str | None = None,
     ) -> list[Memory]:
         """List memories with optional filters."""
-        query = "SELECT * FROM memories WHERE project_token = $1"
-        params: list = [self._project_token]
+        query = "SELECT * FROM memories WHERE project_id = $1"
+        params: list = [self._project_id]
         idx = 2
 
         if tag:
@@ -194,11 +195,11 @@ class MemoryService:
                 """
                 SELECT tag, COUNT(*) AS cnt
                 FROM memories, UNNEST(tags) AS tag
-                WHERE project_token = $1
+                WHERE project_id = $1
                 GROUP BY tag
                 ORDER BY cnt DESC
                 """,
-                self._project_token,
+                self._project_id,
             )
         return [{row["tag"]: row["cnt"]} for row in rows]
 
@@ -209,11 +210,11 @@ class MemoryService:
                 """
                 SELECT author, COUNT(*) AS cnt
                 FROM memories
-                WHERE project_token = $1 AND author IS NOT NULL
+                WHERE project_id = $1 AND author IS NOT NULL
                 GROUP BY author
                 ORDER BY cnt DESC
                 """,
-                self._project_token,
+                self._project_id,
             )
         return [{row["author"]: row["cnt"]} for row in rows]
 
@@ -223,11 +224,11 @@ class MemoryService:
             rows = await conn.fetch(
                 """
                 SELECT * FROM memories
-                WHERE project_token = $1 AND file_path ILIKE $2
+                WHERE project_id = $1 AND file_path ILIKE $2
                 ORDER BY created_at DESC
                 LIMIT $3
                 """,
-                self._project_token,
+                self._project_id,
                 f"%{file_path}%",
                 limit,
             )
@@ -245,33 +246,33 @@ class MemoryService:
         """Get aggregated project summary."""
         async with self._pool.acquire() as conn:
             total = await conn.fetchval(
-                "SELECT COUNT(*) FROM memories WHERE project_token = $1",
-                self._project_token,
+                "SELECT COUNT(*) FROM memories WHERE project_id = $1",
+                self._project_id,
             )
 
             recent_rows = await conn.fetch(
-                "SELECT * FROM memories WHERE project_token = $1 ORDER BY created_at DESC LIMIT 10",
-                self._project_token,
+                "SELECT * FROM memories WHERE project_id = $1 ORDER BY created_at DESC LIMIT 10",
+                self._project_id,
             )
 
             tag_rows = await conn.fetch(
                 """
                 SELECT tag, COUNT(*) as cnt
                 FROM memories, UNNEST(tags) AS tag
-                WHERE project_token = $1
+                WHERE project_id = $1
                 GROUP BY tag
                 ORDER BY cnt DESC
                 LIMIT 10
                 """,
-                self._project_token,
+                self._project_id,
             )
 
             contributor_rows = await conn.fetch(
                 """
                 SELECT DISTINCT author FROM memories
-                WHERE project_token = $1 AND author IS NOT NULL
+                WHERE project_id = $1 AND author IS NOT NULL
                 """,
-                self._project_token,
+                self._project_id,
             )
 
         return ProjectContext(
@@ -285,7 +286,7 @@ class MemoryService:
     def _row_to_memory(row: asyncpg.Record) -> Memory:
         return Memory(
             id=row["id"],
-            project_token=row["project_token"],
+            project_id=row["project_id"],
             content=row["content"],
             author=row["author"],
             tags=list(row["tags"]) if row["tags"] else [],

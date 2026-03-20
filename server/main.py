@@ -4,6 +4,7 @@ from contextlib import asynccontextmanager
 import asyncpg
 from mcp.server.fastmcp import FastMCP
 
+from core.auth import TokenAuth
 from core.embeddings import create_embedding_provider
 from core.memory import MemoryService
 from core.migrations import run_migrations
@@ -36,7 +37,15 @@ async def lifespan(server: FastMCP):
     await run_migrations(pool)
     logger.info("Migrations applied")
 
-    # 3. Initialize embedding provider
+    # 3. Initialize auth and resolve project
+    token_auth = TokenAuth(pool)
+    project = await token_auth.ensure_project(
+        token=settings.project_token,
+        name="Default Project",
+    )
+    logger.info(f"Active project: {project.name} ({project.id})")
+
+    # 4. Initialize embedding provider
     embedding_kwargs = {}
     if settings.embedding_provider == "gemini":
         embedding_kwargs["api_key"] = settings.gemini_api_key
@@ -49,7 +58,7 @@ async def lifespan(server: FastMCP):
     embeddings = create_embedding_provider(settings.embedding_provider, **embedding_kwargs)
     logger.info(f"Embedding provider: {settings.embedding_provider} (dim={embeddings.dimension})")
 
-    # 4. Initialize vector store
+    # 5. Initialize vector store
     vector_store = create_vector_store(
         settings.vector_store,
         database_url=settings.database_url,
@@ -59,19 +68,21 @@ async def lifespan(server: FastMCP):
     await vector_store.initialize()
     logger.info(f"Vector store: {settings.vector_store}")
 
-    # 5. Create services
-    memory_service = MemoryService(pool, vector_store, embeddings, settings.project_token)
-    search_service = SearchService(memory_service, vector_store, embeddings, settings.project_token)
+    # 6. Create services scoped to the active project
+    memory_service = MemoryService(pool, vector_store, embeddings, project.id)
+    search_service = SearchService(memory_service, vector_store, embeddings, project.id)
     logger.info("SyncContext ready")
 
-    # 6. Yield context to tool handlers
+    # 7. Yield context to tool handlers
     yield {
         "memory_service": memory_service,
         "search_service": search_service,
+        "token_auth": token_auth,
+        "admin_token": settings.admin_token,
         "db_pool": pool,
     }
 
-    # 7. Cleanup
+    # 8. Cleanup
     logger.info("Shutting down SyncContext...")
     await embeddings.close()
     await vector_store.close()

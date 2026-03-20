@@ -20,6 +20,8 @@ EXPECTED_TOOLS = {
     "search_by_file",
     "bulk_save_memories",
     "find_similar",
+    "create_project",
+    "list_projects",
 }
 
 
@@ -32,16 +34,16 @@ def mcp_server() -> FastMCP:
 
 
 def test_all_tools_registered(mcp_server: FastMCP) -> None:
-    """All 12 expected tools must be present after register_tools is called."""
+    """All expected tools must be present after register_tools is called."""
     tools = asyncio.run(mcp_server.list_tools())
     registered_names = {t.name for t in tools}
     assert registered_names == EXPECTED_TOOLS
 
 
 def test_tool_count(mcp_server: FastMCP) -> None:
-    """Exactly 12 tools should be registered — no more, no less."""
+    """Exactly 14 tools should be registered (12 original + 2 admin)."""
     tools = asyncio.run(mcp_server.list_tools())
-    assert len(tools) == 12
+    assert len(tools) == 14
 
 
 @pytest.mark.parametrize("tool_name", sorted(EXPECTED_TOOLS))

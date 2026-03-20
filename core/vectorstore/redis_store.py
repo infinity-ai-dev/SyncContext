@@ -41,6 +41,7 @@ class RedisVectorStore(VectorStore):
         except redis.ResponseError:
             schema = (
                 TagField("project_token"),
+                TagField("project_id"),
                 TagField("memory_id"),
                 VectorField(
                     "embedding",
@@ -64,6 +65,7 @@ class RedisVectorStore(VectorStore):
         mapping = {
             "embedding": embedding_bytes,
             "project_token": metadata.get("project_token", ""),
+            "project_id": metadata.get("project_id", ""),
             "memory_id": str(id),
             "metadata": json.dumps(metadata),
         }
@@ -76,9 +78,19 @@ class RedisVectorStore(VectorStore):
         filter_metadata: dict | None = None,
     ) -> list[dict]:
         query_bytes = np.array(query_vector, dtype=np.float32).tobytes()
-        project_token = (filter_metadata or {}).get("project_token", "")
+        fm = filter_metadata or {}
 
-        filter_expr = f"@project_token:{{{project_token}}}" if project_token else "*"
+        # Prefer project_id filtering; fall back to project_token for backward compat
+        project_id = fm.get("project_id")
+        project_token = fm.get("project_token")
+
+        if project_id:
+            filter_expr = f"@project_id:{{{project_id}}}"
+        elif project_token:
+            filter_expr = f"@project_token:{{{project_token}}}"
+        else:
+            filter_expr = "*"
+
         q = (
             Query(f"({filter_expr})=>[KNN {top_k} @embedding $vec AS score]")
             .sort_by("score")

@@ -1,6 +1,6 @@
-from uuid import UUID
+from uuid import UUID, uuid4
 
-from core.models import Memory, MemoryCreate, MemoryUpdate, ProjectContext, SearchResult
+from core.models import Memory, MemoryCreate, MemoryUpdate, Project, ProjectContext, SearchResult
 
 
 def test_memory_create():
@@ -20,9 +20,10 @@ def test_memory_create_defaults():
 
 
 def test_memory_has_uuid():
-    m = Memory(project_token="tok", content="test")
+    pid = uuid4()
+    m = Memory(project_id=pid, content="test")
     assert isinstance(m.id, UUID)
-    assert m.project_token == "tok"
+    assert m.project_id == pid
 
 
 def test_memory_update_partial():
@@ -33,7 +34,8 @@ def test_memory_update_partial():
 
 
 def test_search_result():
-    m = Memory(project_token="tok", content="test")
+    pid = uuid4()
+    m = Memory(project_id=pid, content="test")
     sr = SearchResult(memory=m, score=0.95)
     assert sr.score == 0.95
     assert sr.memory.content == "test"
@@ -48,3 +50,36 @@ def test_project_context():
     )
     assert ctx.total_memories == 10
     assert len(ctx.contributors) == 2
+
+
+def test_project_defaults():
+    p = Project(name="Test Project", token="sc_abc123")
+    assert isinstance(p.id, UUID)
+    assert p.name == "Test Project"
+    assert p.token == "sc_abc123"
+    assert p.description is None
+    assert p.embedding_provider == "gemini"
+    assert p.embedding_dimension == 768
+    assert p.is_active is True
+    assert p.max_memories is None
+
+
+def test_project_with_all_fields():
+    pid = uuid4()
+    p = Project(
+        id=pid,
+        name="Full Project",
+        token="sc_full",
+        description="A fully specified project",
+        embedding_provider="openai",
+        embedding_dimension=1536,
+        is_active=False,
+        max_memories=1000,
+    )
+    assert p.id == pid
+    assert p.name == "Full Project"
+    assert p.description == "A fully specified project"
+    assert p.embedding_provider == "openai"
+    assert p.embedding_dimension == 1536
+    assert p.is_active is False
+    assert p.max_memories == 1000

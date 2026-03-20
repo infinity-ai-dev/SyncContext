@@ -2,6 +2,7 @@ from uuid import UUID
 
 from mcp.server.fastmcp import Context, FastMCP
 
+from core.auth import TokenAuth
 from core.memory import MemoryService
 from core.models import MemoryCreate, MemoryUpdate
 from core.search import SearchService
@@ -13,6 +14,14 @@ def register_tools(mcp: FastMCP) -> None:
     def _get_services(ctx: Context) -> tuple[MemoryService, SearchService]:
         lc = ctx.request_context.lifespan_context
         return lc["memory_service"], lc["search_service"]
+
+    def _get_auth(ctx: Context) -> TokenAuth:
+        lc = ctx.request_context.lifespan_context
+        return lc["token_auth"]
+
+    def _get_admin_token(ctx: Context) -> str | None:
+        lc = ctx.request_context.lifespan_context
+        return lc.get("admin_token")
 
     @mcp.tool()
     async def save_memory(
@@ -129,7 +138,8 @@ def register_tools(mcp: FastMCP) -> None:
             tags_str = f" [{', '.join(m.tags)}]" if m.tags else ""
             author_str = f" by {m.author}" if m.author else ""
             lines.append(
-                f"- [{m.id}] ({m.created_at.strftime('%Y-%m-%d')}) {m.memory_type}{author_str}{tags_str}\n"
+                f"- [{m.id}] ({m.created_at.strftime('%Y-%m-%d')}) "
+                f"{m.memory_type}{author_str}{tags_str}\n"
                 f"  {m.content[:120]}{'...' if len(m.content) > 120 else ''}\n"
             )
         return "\n".join(lines)
@@ -337,7 +347,8 @@ def register_tools(mcp: FastMCP) -> None:
             tags_str = f" [{', '.join(m.tags)}]" if m.tags else ""
             author_str = f" by {m.author}" if m.author else ""
             lines.append(
-                f"- [{m.id}] ({m.created_at.strftime('%Y-%m-%d')}) {m.memory_type}{author_str}{tags_str}\n"
+                f"- [{m.id}] ({m.created_at.strftime('%Y-%m-%d')}) "
+                f"{m.memory_type}{author_str}{tags_str}\n"
                 f"  File: {m.file_path}\n"
                 f"  {m.content[:120]}{'...' if len(m.content) > 120 else ''}\n"
             )
@@ -417,10 +428,94 @@ def register_tools(mcp: FastMCP) -> None:
             author_str = f" by {m.author}" if m.author else ""
             file_str = f"  File: {m.file_path}\n" if m.file_path else ""
             lines.append(
-                f"{i}. [score: {r.score:.2f}]{author_str} ({m.created_at.strftime('%Y-%m-%d')})\n"
+                f"{i}. [score: {r.score:.2f}]{author_str} "
+                f"({m.created_at.strftime('%Y-%m-%d')})\n"
                 f"  Type: {m.memory_type}\n"
                 f"{tags_str}"
                 f"{file_str}"
                 f"  {m.content}\n"
+            )
+        return "\n".join(lines)
+
+    # ── Admin tools ──────────────────────────────────────────────────────
+
+    @mcp.tool()
+    async def create_project(
+        name: str,
+        description: str | None = None,
+        embedding_provider: str = "gemini",
+        embedding_dimension: int = 768,
+        max_memories: int | None = None,
+        admin_token: str | None = None,
+        ctx: Context = None,
+    ) -> str:
+        """Create a new project namespace. Returns the generated project token.
+
+        Requires the admin token to be provided and match the server's configured
+        admin token.
+
+        Args:
+            name: Display name for the project
+            description: Optional project description
+            embedding_provider: Embedding provider (gemini, openai, ollama)
+            embedding_dimension: Embedding vector dimension
+            max_memories: Maximum number of memories (None = unlimited)
+            admin_token: Admin authentication token
+        """
+        expected_admin = _get_admin_token(ctx)
+        if not expected_admin:
+            return "Admin operations are disabled (no admin token configured)."
+        if admin_token != expected_admin:
+            return "Invalid admin token."
+
+        auth = _get_auth(ctx)
+        project = await auth.create_project(
+            name=name,
+            description=description,
+            embedding_provider=embedding_provider,
+            embedding_dimension=embedding_dimension,
+            max_memories=max_memories,
+        )
+        return (
+            f"Project created successfully.\n"
+            f"ID: {project.id}\n"
+            f"Name: {project.name}\n"
+            f"Token: {project.token}\n"
+            f"Provider: {project.embedding_provider}\n"
+            f"Dimension: {project.embedding_dimension}"
+        )
+
+    @mcp.tool()
+    async def list_projects(
+        admin_token: str | None = None,
+        ctx: Context = None,
+    ) -> str:
+        """List all registered projects. Requires admin token.
+
+        Args:
+            admin_token: Admin authentication token
+        """
+        expected_admin = _get_admin_token(ctx)
+        if not expected_admin:
+            return "Admin operations are disabled (no admin token configured)."
+        if admin_token != expected_admin:
+            return "Invalid admin token."
+
+        auth = _get_auth(ctx)
+        projects = await auth.list_projects()
+
+        if not projects:
+            return "No projects registered."
+
+        lines = [f"Registered projects ({len(projects)} total):\n"]
+        for p in projects:
+            status = "active" if p.is_active else "inactive"
+            max_mem = str(p.max_memories) if p.max_memories else "unlimited"
+            lines.append(
+                f"- [{p.id}] {p.name} ({status})\n"
+                f"  Token: {p.token[:12]}...\n"
+                f"  Provider: {p.embedding_provider} (dim={p.embedding_dimension})\n"
+                f"  Max memories: {max_mem}\n"
+                f"  Created: {p.created_at.strftime('%Y-%m-%d %H:%M:%S')}\n"
             )
         return "\n".join(lines)

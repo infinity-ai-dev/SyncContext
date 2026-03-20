@@ -28,7 +28,8 @@ class PgVectorStore(VectorStore):
                 CREATE TABLE IF NOT EXISTS memory_vectors (
                     id UUID PRIMARY KEY,
                     embedding vector({self._dimension}),
-                    project_token VARCHAR(255) NOT NULL,
+                    project_token VARCHAR(255) NOT NULL DEFAULT '',
+                    project_id UUID,
                     metadata JSONB DEFAULT '{{}}'::jsonb
                 )
             """)
@@ -41,24 +42,31 @@ class PgVectorStore(VectorStore):
                 CREATE INDEX IF NOT EXISTS idx_memory_vectors_project
                 ON memory_vectors(project_token)
             """)
+            await conn.execute("""
+                CREATE INDEX IF NOT EXISTS idx_memory_vectors_project_id
+                ON memory_vectors(project_id)
+            """)
 
     async def _init_connection(self, conn: asyncpg.Connection) -> None:
         await register_vector(conn)
 
     async def upsert(self, id: UUID, vector: list[float], metadata: dict) -> None:
+        project_id = metadata.pop("project_id", None)
         project_token = metadata.pop("project_token", "")
         async with self._pool.acquire() as conn:
             await conn.execute(
                 """
-                INSERT INTO memory_vectors (id, embedding, project_token, metadata)
-                VALUES ($1, $2, $3, $4::jsonb)
+                INSERT INTO memory_vectors (id, embedding, project_token, project_id, metadata)
+                VALUES ($1, $2, $3, $4, $5::jsonb)
                 ON CONFLICT (id) DO UPDATE SET
                     embedding = EXCLUDED.embedding,
+                    project_id = EXCLUDED.project_id,
                     metadata = EXCLUDED.metadata
                 """,
                 id,
                 vector,
                 project_token,
+                UUID(project_id) if project_id else None,
                 json.dumps(metadata),
             )
 
@@ -68,21 +76,47 @@ class PgVectorStore(VectorStore):
         top_k: int = 10,
         filter_metadata: dict | None = None,
     ) -> list[dict]:
-        project_token = (filter_metadata or {}).get("project_token", "")
+        fm = filter_metadata or {}
+        project_id = fm.get("project_id")
+        project_token = fm.get("project_token")
 
-        async with self._pool.acquire() as conn:
-            rows = await conn.fetch(
-                """
-                SELECT id, 1 - (embedding <=> $1::vector) AS score, metadata
-                FROM memory_vectors
-                WHERE project_token = $2
-                ORDER BY embedding <=> $1::vector
-                LIMIT $3
-                """,
-                query_vector,
-                project_token,
-                top_k,
-            )
+        # Prefer project_id filtering; fall back to project_token for backward compat
+        if project_id:
+            filter_clause = "WHERE project_id = $2"
+            filter_param = UUID(project_id) if isinstance(project_id, str) else project_id
+        elif project_token:
+            filter_clause = "WHERE project_token = $2"
+            filter_param = project_token
+        else:
+            filter_clause = "WHERE TRUE"
+            filter_param = None
+
+        if filter_param is not None:
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch(
+                    f"""
+                    SELECT id, 1 - (embedding <=> $1::vector) AS score, metadata
+                    FROM memory_vectors
+                    {filter_clause}
+                    ORDER BY embedding <=> $1::vector
+                    LIMIT $3
+                    """,
+                    query_vector,
+                    filter_param,
+                    top_k,
+                )
+        else:
+            async with self._pool.acquire() as conn:
+                rows = await conn.fetch(
+                    """
+                    SELECT id, 1 - (embedding <=> $1::vector) AS score, metadata
+                    FROM memory_vectors
+                    ORDER BY embedding <=> $1::vector
+                    LIMIT $2
+                    """,
+                    query_vector,
+                    top_k,
+                )
 
         return [
             {

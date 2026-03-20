@@ -12,6 +12,7 @@ class Settings(BaseSettings):
 
     # Auth
     project_token: str = "default-dev-token"
+    admin_token: str | None = None
 
     # PostgreSQL (always required for metadata)
     database_url: str = "postgresql://synccontext:password@localhost:5432/synccontext"
