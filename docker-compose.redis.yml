@@ -1,0 +1,19 @@
+# Override file for Redis-based deployments
+# Usage: docker compose -f docker-compose.yml -f docker-compose.redis.yml up
+
+services:
+  synccontext:
+    environment:
+      SYNCCONTEXT_VECTOR_STORE: redis
+      SYNCCONTEXT_REDIS_URL: redis://redis:6379/0
+
+  redis:
+    image: redis/redis-stack:latest
+    command: redis-server --appendonly yes
+    ports:
+      - "6379:6379"
+    volumes:
+      - redisdata:/data
+
+volumes:
+  redisdata:

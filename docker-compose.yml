@@ -1,0 +1,34 @@
+services:
+  synccontext:
+    build: .
+    environment:
+      SYNCCONTEXT_PROJECT_TOKEN: ${SYNCCONTEXT_PROJECT_TOKEN:-dev-token}
+      SYNCCONTEXT_DATABASE_URL: postgresql://synccontext:synccontext@postgres:5432/synccontext
+      SYNCCONTEXT_EMBEDDING_PROVIDER: ${SYNCCONTEXT_EMBEDDING_PROVIDER:-gemini}
+      SYNCCONTEXT_GEMINI_API_KEY: ${SYNCCONTEXT_GEMINI_API_KEY:-}
+      SYNCCONTEXT_OPENAI_API_KEY: ${SYNCCONTEXT_OPENAI_API_KEY:-}
+      SYNCCONTEXT_VECTOR_STORE: pgvector
+      SYNCCONTEXT_TRANSPORT: stdio
+    depends_on:
+      postgres:
+        condition: service_healthy
+    stdin_open: true
+
+  postgres:
+    image: pgvector/pgvector:pg17
+    environment:
+      POSTGRES_USER: synccontext
+      POSTGRES_PASSWORD: synccontext
+      POSTGRES_DB: synccontext
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    ports:
+      - "5432:5432"
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U synccontext"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+
+volumes:
+  pgdata:
