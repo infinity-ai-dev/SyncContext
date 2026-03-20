@@ -7,7 +7,7 @@ runtime: python
 entry: server/main.py
 
 build:
-  install: pip install -e .
+  install: pip install -r requirements.txt
 
 startCommand:
   type: stdio
