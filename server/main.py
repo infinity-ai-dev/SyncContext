@@ -6,9 +6,7 @@ from mcp.server.fastmcp import FastMCP
 
 from core.auth import TokenAuth
 from core.embeddings import create_embedding_provider
-from core.memory import MemoryService
 from core.migrations import run_migrations
-from core.search import SearchService
 from core.vectorstore import create_vector_store
 from server.config import Settings
 from server.tools import register_tools
@@ -18,7 +16,7 @@ _settings = Settings()
 
 @asynccontextmanager
 async def lifespan(server: FastMCP):
-    """Initialize all resources on startup, cleanup on shutdown."""
+    """Initialize shared resources on startup, cleanup on shutdown."""
     settings = _settings
 
     logging.basicConfig(
@@ -44,17 +42,19 @@ async def lifespan(server: FastMCP):
     logger.info("Executing migrations...")
     await run_migrations(pool)
 
-    # 3. Initialize auth and resolve project
+    # 3. Initialize auth
     logger.info("Initializing authentication...")
     token_auth = TokenAuth(pool)
-    project = await token_auth.ensure_project(
-        token=settings.project_token,
-        name="Default Project",
-    )
-    logger.info(f"Active project: {project.name} (id={project.id})")
-    logger.info(f"Project token: {project.token[:12]}...{project.token[-4:]}")
 
-    # 4. Initialize embedding provider (auto-detect from credentials)
+    # For stdio transport, resolve project from env var (backward compat)
+    if settings.transport == "stdio" and settings.project_token != "default-dev-token":
+        project = await token_auth.ensure_project(
+            token=settings.project_token,
+            name="Default Project",
+        )
+        logger.info(f"Stdio project: {project.name} (id={project.id})")
+
+    # 4. Initialize embedding provider
     provider = settings.resolve_embedding_provider()
     if settings.embedding_provider == "auto":
         logger.info(f"Embedding provider auto-detected: {provider}")
@@ -85,24 +85,23 @@ async def lifespan(server: FastMCP):
     await vector_store.initialize()
     logger.info(f"Vector store ready — backend={settings.vector_store}")
 
-    # 6. Create services scoped to the active project
-    memory_service = MemoryService(pool, vector_store, embeddings, project.id)
-    search_service = SearchService(memory_service, vector_store, embeddings, project.id)
-
     logger.info("=" * 50)
     logger.info("SyncContext ready — all systems operational")
+    if settings.transport != "stdio":
+        logger.info("Projects are resolved per-request from Authorization header")
     logger.info("=" * 50)
 
-    # 7. Yield context to tool handlers
+    # 6. Yield shared resources (NOT project-specific services)
     yield {
-        "memory_service": memory_service,
-        "search_service": search_service,
+        "db_pool": pool,
+        "vector_store": vector_store,
+        "embeddings": embeddings,
         "token_auth": token_auth,
         "admin_token": settings.admin_token,
-        "db_pool": pool,
+        "project_token": settings.project_token,
     }
 
-    # 8. Cleanup
+    # 7. Cleanup
     logger.info("Shutting down SyncContext...")
     await embeddings.close()
     await vector_store.close()
@@ -127,7 +126,63 @@ register_tools(mcp)
 
 
 def main():
-    mcp.run(transport=_settings.transport)
+    settings = _settings
+
+    if settings.transport in ("streamable-http", "sse"):
+        # For HTTP transports, wrap the app with auth middleware
+        import uvicorn
+
+        from server.middleware import ProjectAuthMiddleware
+
+        app = mcp.streamable_http_app()
+        # Middleware needs token_auth, which is created in lifespan.
+        # We pass a lazy reference that gets resolved after lifespan starts.
+        app.add_middleware(ProjectAuthMiddleware, token_auth=_LazyTokenAuth())
+
+        config = uvicorn.Config(
+            app,
+            host=settings.host,
+            port=settings.port,
+            log_level=settings.log_level.lower(),
+        )
+        server = uvicorn.Server(config)
+
+        import anyio
+
+        anyio.run(server.serve)
+    else:
+        mcp.run(transport="stdio")
+
+
+class _LazyTokenAuth:
+    """Proxy that lazily resolves TokenAuth from the lifespan context.
+
+    The middleware is added before lifespan runs, so we use this proxy
+    to defer access to the actual TokenAuth until the first request.
+    """
+
+    _instance: TokenAuth | None = None
+
+    async def validate_token(self, token):
+        return await self._get().validate_token(token)
+
+    async def create_project_with_token(self, **kwargs):
+        return await self._get().create_project_with_token(**kwargs)
+
+    async def update_project_name(self, project_id, name):
+        return await self._get().update_project_name(project_id, name)
+
+    def _get(self) -> TokenAuth:
+        if self._instance is None:
+            # Resolve from the MCP server's session manager state
+            ctx = mcp._session_manager
+            if ctx and hasattr(ctx, "_app") and hasattr(ctx._app, "_lifespan_context"):
+                lc = ctx._app._lifespan_context
+                if lc and "token_auth" in lc:
+                    self._instance = lc["token_auth"]
+        if self._instance is None:
+            raise RuntimeError("TokenAuth not yet initialized — lifespan hasn't started")
+        return self._instance
 
 
 if __name__ == "__main__":

@@ -6,22 +6,46 @@ from core.auth import TokenAuth
 from core.memory import MemoryService
 from core.models import MemoryCreate, MemoryUpdate
 from core.search import SearchService
+from server.context import current_project
 
 
 def register_tools(mcp: FastMCP) -> None:
     """Register all SyncContext MCP tools."""
 
     def _get_services(ctx: Context) -> tuple[MemoryService, SearchService]:
+        """Create services scoped to the current request's project."""
         lc = ctx.request_context.lifespan_context
-        return lc["memory_service"], lc["search_service"]
+        pool = lc["db_pool"]
+        vector_store = lc["vector_store"]
+        embeddings = lc["embeddings"]
+
+        # Resolve project: from contextvar (HTTP) or fallback to env token (stdio)
+        project = current_project.get()
+        if project:
+            project_id = project.id
+        else:
+            # stdio mode: ensure_project was called in lifespan
+            # Fallback: use a zero UUID (shouldn't happen in practice)
+            from uuid import UUID as _UUID
+
+            project_id = _UUID("00000000-0000-0000-0000-000000000000")
+
+        memory_service = MemoryService(pool, vector_store, embeddings, project_id)
+        search_service = SearchService(memory_service, vector_store, embeddings, project_id)
+        return memory_service, search_service
 
     def _get_auth(ctx: Context) -> TokenAuth:
-        lc = ctx.request_context.lifespan_context
-        return lc["token_auth"]
+        return ctx.request_context.lifespan_context["token_auth"]
 
     def _get_admin_token(ctx: Context) -> str | None:
-        lc = ctx.request_context.lifespan_context
-        return lc.get("admin_token")
+        return ctx.request_context.lifespan_context.get("admin_token")
+
+    def _get_project_info() -> str:
+        """Get current project info for tool responses."""
+        project = current_project.get()
+        if project:
+            return f"[Project: {project.name}]"
+        return ""
 
     @mcp.tool()
     async def save_memory(
@@ -55,7 +79,7 @@ def register_tools(mcp: FastMCP) -> None:
             )
         )
         return (
-            f"Memory saved successfully.\n"
+            f"Memory saved successfully. {_get_project_info()}\n"
             f"ID: {memory.id}\n"
             f"Type: {memory.memory_type}\n"
             f"Tags: {', '.join(memory.tags) if memory.tags else 'none'}"
@@ -81,17 +105,12 @@ def register_tools(mcp: FastMCP) -> None:
             author: Filter by specific author
         """
         _, search_service = _get_services(ctx)
-        results = await search_service.search(
-            query=query,
-            top_k=top_k,
-            tag=tag,
-            author=author,
-        )
+        results = await search_service.search(query=query, top_k=top_k, tag=tag, author=author)
 
         if not results:
-            return "No relevant memories found for this query."
+            return f"No relevant memories found. {_get_project_info()}"
 
-        lines = [f"Found {len(results)} relevant memories:\n"]
+        lines = [f"Found {len(results)} relevant memories: {_get_project_info()}\n"]
         for i, r in enumerate(results, 1):
             m = r.memory
             tags_str = f"  Tags: {', '.join(m.tags)}\n" if m.tags else ""
@@ -100,8 +119,7 @@ def register_tools(mcp: FastMCP) -> None:
             lines.append(
                 f"{i}. [score: {r.score:.2f}]{author_str} ({m.created_at.strftime('%Y-%m-%d')})\n"
                 f"  Type: {m.memory_type}\n"
-                f"{tags_str}"
-                f"{file_str}"
+                f"{tags_str}{file_str}"
                 f"  {m.content}\n"
             )
         return "\n".join(lines)
@@ -123,17 +141,12 @@ def register_tools(mcp: FastMCP) -> None:
             memory_type: Filter by type (general, decision, bug, pattern, onboarding)
         """
         memory_service, _ = _get_services(ctx)
-        memories = await memory_service.list_memories(
-            limit=limit,
-            tag=tag,
-            author=author,
-            memory_type=memory_type,
-        )
+        memories = await memory_service.list_memories(limit=limit, tag=tag, author=author, memory_type=memory_type)
 
         if not memories:
-            return "No memories found."
+            return f"No memories found. {_get_project_info()}"
 
-        lines = [f"Listing {len(memories)} memories:\n"]
+        lines = [f"Listing {len(memories)} memories: {_get_project_info()}\n"]
         for m in memories:
             tags_str = f" [{', '.join(m.tags)}]" if m.tags else ""
             author_str = f" by {m.author}" if m.author else ""
@@ -145,10 +158,7 @@ def register_tools(mcp: FastMCP) -> None:
         return "\n".join(lines)
 
     @mcp.tool()
-    async def delete_memory(
-        memory_id: str,
-        ctx: Context = None,
-    ) -> str:
+    async def delete_memory(memory_id: str, ctx: Context = None) -> str:
         """Delete a specific memory by its ID.
 
         Args:
@@ -191,14 +201,8 @@ def register_tools(mcp: FastMCP) -> None:
 
         updated = await memory_service.update_memory(
             uid,
-            MemoryUpdate(
-                content=content,
-                tags=tags,
-                file_path=file_path,
-                memory_type=memory_type,
-            ),
+            MemoryUpdate(content=content, tags=tags, file_path=file_path, memory_type=memory_type),
         )
-
         if not updated:
             return f"Memory {memory_id} not found."
         return (
@@ -209,35 +213,34 @@ def register_tools(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def get_project_context(
-        ctx: Context = None,
-    ) -> str:
+    async def get_project_context(ctx: Context = None) -> str:
         """Get a summary of the project's shared knowledge base.
 
         Use this when onboarding to a project or when you need an overview
         of what the team has documented so far.
         """
         memory_service, _ = _get_services(ctx)
+        project = current_project.get()
         context = await memory_service.get_project_context()
 
+        project_name = project.name if project else "Unknown"
+
         if context.total_memories == 0:
-            return "This project has no memories yet. Use save_memory to start building the knowledge base."
+            return f"Project: {project_name}\nNo memories yet. Use save_memory to start building the knowledge base."
 
         tags_str = (
             ", ".join(f"{list(t.keys())[0]} ({list(t.values())[0]})" for t in context.top_tags)
             if context.top_tags
             else "none"
         )
-
         contributors_str = ", ".join(context.contributors) if context.contributors else "none"
-
         recent_str = "\n".join(
             f"  - [{m.memory_type}] {m.content[:80]}{'...' if len(m.content) > 80 else ''}"
             for m in context.recent_memories[:5]
         )
 
         return (
-            f"Project Knowledge Base Summary\n"
+            f"Project: {project_name}\n"
             f"{'=' * 35}\n"
             f"Total memories: {context.total_memories}\n"
             f"Contributors: {contributors_str}\n"
@@ -246,10 +249,7 @@ def register_tools(mcp: FastMCP) -> None:
         )
 
     @mcp.tool()
-    async def get_memory(
-        memory_id: str,
-        ctx: Context = None,
-    ) -> str:
+    async def get_memory(memory_id: str, ctx: Context = None) -> str:
         """Get a single memory by its UUID.
 
         Args:
@@ -271,66 +271,45 @@ def register_tools(mcp: FastMCP) -> None:
         return (
             f"Memory [{memory.id}]\n"
             f"Type: {memory.memory_type}\n"
-            f"{author_str}"
-            f"{tags_str}"
-            f"{file_str}"
+            f"{author_str}{tags_str}{file_str}"
             f"Created: {memory.created_at.strftime('%Y-%m-%d %H:%M:%S')}\n"
             f"Updated: {memory.updated_at.strftime('%Y-%m-%d %H:%M:%S')}\n"
             f"Content: {memory.content}"
         )
 
     @mcp.tool()
-    async def list_tags(
-        ctx: Context = None,
-    ) -> str:
-        """List all unique tags used in this project with their usage counts.
-
-        Use this to understand how the team organises knowledge and to discover
-        available tags for filtering with search_memories or list_memories.
-        """
+    async def list_tags(ctx: Context = None) -> str:
+        """List all unique tags used in this project with their usage counts."""
         memory_service, _ = _get_services(ctx)
         tags = await memory_service.list_tags()
 
         if not tags:
             return "No tags found. Save memories with tags to build a taxonomy."
 
-        lines = [f"Tags used in this project ({len(tags)} total):\n"]
+        lines = [f"Tags in this project ({len(tags)} total): {_get_project_info()}\n"]
         for entry in tags:
             tag, count = list(entry.items())[0]
             lines.append(f"  {tag}: {count} {'memory' if count == 1 else 'memories'}")
         return "\n".join(lines)
 
     @mcp.tool()
-    async def list_contributors(
-        ctx: Context = None,
-    ) -> str:
-        """List all contributors who have saved memories in this project, with counts.
-
-        Use this to see who is actively documenting knowledge and to filter
-        memories by a specific author.
-        """
+    async def list_contributors(ctx: Context = None) -> str:
+        """List all contributors who have saved memories in this project."""
         memory_service, _ = _get_services(ctx)
         contributors = await memory_service.list_contributors()
 
         if not contributors:
-            return "No contributors found. Save a memory with an author to get started."
+            return "No contributors found."
 
-        lines = [f"Contributors to this project ({len(contributors)} total):\n"]
+        lines = [f"Contributors ({len(contributors)} total): {_get_project_info()}\n"]
         for entry in contributors:
             author, count = list(entry.items())[0]
             lines.append(f"  {author}: {count} {'memory' if count == 1 else 'memories'}")
         return "\n".join(lines)
 
     @mcp.tool()
-    async def search_by_file(
-        file_path: str,
-        limit: int = 20,
-        ctx: Context = None,
-    ) -> str:
-        """Find all memories related to a specific file path (exact or substring match).
-
-        Use this to discover all context documented about a particular file,
-        directory, or module path.
+    async def search_by_file(file_path: str, limit: int = 20, ctx: Context = None) -> str:
+        """Find all memories related to a specific file path.
 
         Args:
             file_path: File path to search for (substring match, case-insensitive)
@@ -340,9 +319,9 @@ def register_tools(mcp: FastMCP) -> None:
         memories = await memory_service.search_by_file(file_path=file_path, limit=limit)
 
         if not memories:
-            return f"No memories found for file path matching '{file_path}'."
+            return f"No memories found for '{file_path}'."
 
-        lines = [f"Found {len(memories)} memories related to '{file_path}':\n"]
+        lines = [f"Found {len(memories)} memories for '{file_path}': {_get_project_info()}\n"]
         for m in memories:
             tags_str = f" [{', '.join(m.tags)}]" if m.tags else ""
             author_str = f" by {m.author}" if m.author else ""
@@ -355,17 +334,12 @@ def register_tools(mcp: FastMCP) -> None:
         return "\n".join(lines)
 
     @mcp.tool()
-    async def bulk_save_memories(
-        memories: list[dict],
-        ctx: Context = None,
-    ) -> str:
-        """Save multiple memories at once. Useful for importing or batch operations.
-
-        Each item in the list must have a 'content' field and may optionally include
-        'author', 'tags', 'file_path', and 'memory_type'.
+    async def bulk_save_memories(memories: list[dict], ctx: Context = None) -> str:
+        """Save multiple memories at once.
 
         Args:
-            memories: List of memory objects to save
+            memories: List of memory objects with 'content' (required) and optional
+                      'author', 'tags', 'file_path', 'memory_type'
         """
         memory_service, _ = _get_services(ctx)
 
@@ -388,27 +362,19 @@ def register_tools(mcp: FastMCP) -> None:
 
         saved = await memory_service.bulk_save_memories(creates)
 
-        lines = [f"Saved {len(saved)} memories:\n"]
+        lines = [f"Saved {len(saved)} memories: {_get_project_info()}\n"]
         for m in saved:
             tags_str = f" [{', '.join(m.tags)}]" if m.tags else ""
-            truncated = f"{m.content[:80]}{'...' if len(m.content) > 80 else ''}"
-            lines.append(f"  - [{m.id}] {m.memory_type}{tags_str}: {truncated}")
+            lines.append(f"  - [{m.id}] {m.memory_type}{tags_str}: {m.content[:80]}")
         return "\n".join(lines)
 
     @mcp.tool()
-    async def find_similar(
-        memory_id: str,
-        top_k: int = 5,
-        ctx: Context = None,
-    ) -> str:
+    async def find_similar(memory_id: str, top_k: int = 5, ctx: Context = None) -> str:
         """Find memories semantically similar to an existing memory.
 
-        Use this to discover related context, duplicate entries, or connected
-        decisions when reviewing a specific memory.
-
         Args:
-            memory_id: UUID of the source memory to compare against
-            top_k: Maximum number of similar memories to return (default 5)
+            memory_id: UUID of the source memory
+            top_k: Maximum number of similar memories (default 5)
         """
         _, search_service = _get_services(ctx)
         try:
@@ -419,21 +385,17 @@ def register_tools(mcp: FastMCP) -> None:
         results = await search_service.find_similar(memory_id=uid, top_k=top_k)
 
         if not results:
-            return f"No similar memories found for memory {memory_id}."
+            return f"No similar memories found for {memory_id}."
 
-        lines = [f"Found {len(results)} memories similar to [{memory_id}]:\n"]
+        lines = [f"Found {len(results)} similar memories:\n"]
         for i, r in enumerate(results, 1):
             m = r.memory
             tags_str = f"  Tags: {', '.join(m.tags)}\n" if m.tags else ""
             author_str = f" by {m.author}" if m.author else ""
-            file_str = f"  File: {m.file_path}\n" if m.file_path else ""
             lines.append(
-                f"{i}. [score: {r.score:.2f}]{author_str} "
-                f"({m.created_at.strftime('%Y-%m-%d')})\n"
+                f"{i}. [score: {r.score:.2f}]{author_str} ({m.created_at.strftime('%Y-%m-%d')})\n"
                 f"  Type: {m.memory_type}\n"
-                f"{tags_str}"
-                f"{file_str}"
-                f"  {m.content}\n"
+                f"{tags_str}  {m.content}\n"
             )
         return "\n".join(lines)
 
@@ -443,62 +405,43 @@ def register_tools(mcp: FastMCP) -> None:
     async def create_project(
         name: str,
         description: str | None = None,
-        embedding_provider: str = "gemini",
-        embedding_dimension: int = 768,
-        max_memories: int | None = None,
         admin_token: str | None = None,
         ctx: Context = None,
     ) -> str:
-        """Create a new project namespace. Returns the generated project token.
-
-        Requires the admin token to be provided and match the server's configured
-        admin token.
+        """Create a new project. Returns the generated token.
 
         Args:
             name: Display name for the project
             description: Optional project description
-            embedding_provider: Embedding provider (gemini, openai, ollama)
-            embedding_dimension: Embedding vector dimension
-            max_memories: Maximum number of memories (None = unlimited)
             admin_token: Admin authentication token
         """
-        expected_admin = _get_admin_token(ctx)
-        if not expected_admin:
-            return "Admin operations are disabled (no admin token configured)."
-        if admin_token != expected_admin:
+        expected = _get_admin_token(ctx)
+        if not expected:
+            return "Admin operations disabled (no admin token configured)."
+        if admin_token != expected:
             return "Invalid admin token."
 
         auth = _get_auth(ctx)
-        project = await auth.create_project(
-            name=name,
-            description=description,
-            embedding_provider=embedding_provider,
-            embedding_dimension=embedding_dimension,
-            max_memories=max_memories,
-        )
+        project = await auth.create_project(name=name, description=description)
         return (
-            f"Project created successfully.\n"
+            f"Project created.\n"
             f"ID: {project.id}\n"
             f"Name: {project.name}\n"
             f"Token: {project.token}\n"
-            f"Provider: {project.embedding_provider}\n"
-            f"Dimension: {project.embedding_dimension}"
+            f"Share this token with team members for their MCP client config."
         )
 
     @mcp.tool()
-    async def list_projects(
-        admin_token: str | None = None,
-        ctx: Context = None,
-    ) -> str:
+    async def list_projects(admin_token: str | None = None, ctx: Context = None) -> str:
         """List all registered projects. Requires admin token.
 
         Args:
             admin_token: Admin authentication token
         """
-        expected_admin = _get_admin_token(ctx)
-        if not expected_admin:
-            return "Admin operations are disabled (no admin token configured)."
-        if admin_token != expected_admin:
+        expected = _get_admin_token(ctx)
+        if not expected:
+            return "Admin operations disabled (no admin token configured)."
+        if admin_token != expected:
             return "Invalid admin token."
 
         auth = _get_auth(ctx)
@@ -507,15 +450,12 @@ def register_tools(mcp: FastMCP) -> None:
         if not projects:
             return "No projects registered."
 
-        lines = [f"Registered projects ({len(projects)} total):\n"]
+        lines = [f"Projects ({len(projects)} total):\n"]
         for p in projects:
             status = "active" if p.is_active else "inactive"
-            max_mem = str(p.max_memories) if p.max_memories else "unlimited"
             lines.append(
                 f"- [{p.id}] {p.name} ({status})\n"
-                f"  Token: {p.token[:12]}...\n"
-                f"  Provider: {p.embedding_provider} (dim={p.embedding_dimension})\n"
-                f"  Max memories: {max_mem}\n"
+                f"  Token: {p.token[:16]}...\n"
                 f"  Created: {p.created_at.strftime('%Y-%m-%d %H:%M:%S')}\n"
             )
         return "\n".join(lines)

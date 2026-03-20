@@ -89,6 +89,42 @@ class TokenAuth:
             return True
         return False
 
+    async def create_project_with_token(
+        self,
+        token: str,
+        name: str,
+        description: str | None = None,
+    ) -> Project:
+        """Create a new project with a user-provided token."""
+        now = datetime.now(UTC)
+        async with self._pool.acquire() as conn:
+            row = await conn.fetchrow(
+                """
+                INSERT INTO projects
+                    (name, token, description, created_at, updated_at)
+                VALUES ($1, $2, $3, $4, $5)
+                RETURNING *
+                """,
+                name,
+                token,
+                description,
+                now,
+                now,
+            )
+        logger.info(f"Project created with user token: {row['id']} ({name})")
+        return self._row_to_project(row)
+
+    async def update_project_name(self, project_id: UUID, name: str) -> None:
+        """Update a project's name."""
+        async with self._pool.acquire() as conn:
+            await conn.execute(
+                "UPDATE projects SET name = $1, updated_at = $2 WHERE id = $3",
+                name,
+                datetime.now(UTC),
+                project_id,
+            )
+        logger.info(f"Project {project_id} renamed to: {name}")
+
     async def ensure_project(self, token: str, name: str = "Default Project") -> Project:
         """Get project by token, or create it if it doesn't exist.
 
@@ -98,7 +134,7 @@ class TokenAuth:
         project = await self.validate_token(token)
         if project:
             return project
-        return await self.create_project(name=name)
+        return await self.create_project_with_token(token=token, name=name)
 
     @staticmethod
     def _row_to_project(row: asyncpg.Record) -> Project:
