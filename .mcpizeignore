@@ -1,0 +1,8 @@
+Dockerfile
+docker-compose.yml
+deploy/
+.github/
+.serena/
+docs/
+tests/
+Makefile
