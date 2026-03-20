@@ -1,4 +1,4 @@
-"""Starlette middleware for per-request project authentication.
+"""ASGI middleware for per-request project authentication.
 
 Extracts the project token from ``x-project-token`` or ``Authorization``.
 When a shared project token is configured for hosted MCPize deployments,
@@ -6,12 +6,12 @@ it is used as a fallback so capability discovery and calls can succeed
 without per-user credential injection.
 """
 
-import logging
 import json
+import logging
 
-from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse
+from starlette.types import ASGIApp, Message, Receive, Scope, Send
 
 from core.auth import TokenAuth
 from server.context import current_project
@@ -21,28 +21,36 @@ DISCOVERY_METHODS = {"initialize", "tools/list", "resources/list", "prompts/list
 DISCOVERY_PATHS = {"/", "/mcp", "/sse", "/ping"}
 
 
-class ProjectAuthMiddleware(BaseHTTPMiddleware):
+class ProjectAuthMiddleware:
     """Resolve project from Bearer token on every HTTP request."""
 
     def __init__(
         self,
-        app,
+        app: ASGIApp,
         token_auth: TokenAuth,
         fallback_project_token: str | None = None,
         fallback_project_name: str = "",
     ):
-        super().__init__(app)
+        self.app = app
         self._token_auth = token_auth
         self._fallback_project_token = (fallback_project_token or "").strip()
         self._fallback_project_name = fallback_project_name
 
-    async def dispatch(self, request: Request, call_next):
-        if await self._is_discovery_request(request):
-            return await call_next(request)
+    async def __call__(self, scope: Scope, receive: Receive, send: Send) -> None:
+        if scope["type"] != "http":
+            await self.app(scope, receive, send)
+            return
+
+        body = await self._read_body(receive)
+        request = Request(scope)
+
+        if self._is_discovery_request(request, body):
+            await self.app(scope, self._build_receive(body, receive), send)
+            return
 
         token = self._extract_project_token(request)
         if not token:
-            return JSONResponse(
+            response = JSONResponse(
                 {
                     "error": (
                         "Missing project token. Use header "
@@ -51,6 +59,8 @@ class ProjectAuthMiddleware(BaseHTTPMiddleware):
                 },
                 status_code=401,
             )
+            await response(scope, self._build_receive(body, receive), send)
+            return
 
         # Extract optional project name from header (used on first connection)
         project_name = request.headers.get("x-project-name", "").strip() or self._fallback_project_name
@@ -76,17 +86,18 @@ class ProjectAuthMiddleware(BaseHTTPMiddleware):
             if "TokenAuth not yet initialized" not in str(exc):
                 raise
             logger.warning("Request received before TokenAuth was ready")
-            return JSONResponse(
+            response = JSONResponse(
                 {"error": "Server startup incomplete. Retry in a few seconds."},
                 status_code=503,
             )
+            await response(scope, self._build_receive(body, receive), send)
+            return
 
         # Set the project in contextvar for tool handlers
         ctx_token = current_project.set(project)
 
         try:
-            response = await call_next(request)
-            return response
+            await self.app(scope, self._build_receive(body, receive), send)
         finally:
             current_project.reset(ctx_token)
 
@@ -105,16 +116,13 @@ class ProjectAuthMiddleware(BaseHTTPMiddleware):
 
         return ""
 
-    async def _is_discovery_request(self, request: Request) -> bool:
+    def _is_discovery_request(self, request: Request, body: bytes) -> bool:
         """Allow MCP capability discovery requests without project auth."""
         if request.method == "GET" and request.url.path in DISCOVERY_PATHS:
             return True
 
         if request.method != "POST" or request.url.path not in {"/", "/mcp"}:
             return False
-
-        body = await request.body()
-        self._restore_body(request, body)
 
         if not body:
             return False
@@ -127,10 +135,32 @@ class ProjectAuthMiddleware(BaseHTTPMiddleware):
         return payload.get("method") in DISCOVERY_METHODS
 
     @staticmethod
-    def _restore_body(request: Request, body: bytes) -> None:
-        """Replay the consumed request body so downstream handlers can read it."""
+    async def _read_body(receive: Receive) -> bytes:
+        """Buffer the request body once so it can be replayed downstream."""
+        chunks: list[bytes] = []
 
-        async def receive() -> dict:
-            return {"type": "http.request", "body": body, "more_body": False}
+        while True:
+            message = await receive()
+            if message["type"] == "http.disconnect":
+                break
 
-        request._receive = receive
+            chunks.append(message.get("body", b""))
+            if not message.get("more_body", False):
+                break
+
+        return b"".join(chunks)
+
+    @staticmethod
+    def _build_receive(body: bytes, original_receive: Receive) -> Receive:
+        """Replay the buffered body, then forward later events such as disconnects."""
+        body_sent = False
+
+        async def receive() -> Message:
+            nonlocal body_sent
+            if not body_sent:
+                body_sent = True
+                return {"type": "http.request", "body": body, "more_body": False}
+
+            return await original_receive()
+
+        return receive

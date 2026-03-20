@@ -4,7 +4,7 @@ from unittest.mock import AsyncMock
 import httpx
 import pytest
 from starlette.applications import Starlette
-from starlette.responses import JSONResponse
+from starlette.responses import JSONResponse, StreamingResponse
 from starlette.routing import Route
 
 from server.context import current_project
@@ -29,6 +29,15 @@ async def _echo_endpoint(request):
             "project": getattr(project, "name", None),
         }
     )
+
+
+async def _stream_endpoint(request):
+    payload = await request.json()
+
+    async def _events():
+        yield f"data: {payload.get('method')}\n\n".encode()
+
+    return StreamingResponse(_events(), media_type="text/event-stream")
 
 
 def _build_app(token_auth, **middleware_kwargs):
@@ -62,6 +71,26 @@ async def test_initialize_request_skips_auth_and_preserves_body():
 
     assert response.status_code == 200
     assert response.json() == {"method": "initialize", "project": None}
+    token_auth.validate_token.assert_not_awaited()
+
+
+@pytest.mark.asyncio
+async def test_initialize_request_supports_streaming_response():
+    token_auth = AsyncMock()
+    app = Starlette(routes=[Route("/mcp", _stream_endpoint, methods=["POST"])])
+    app.add_middleware(ProjectAuthMiddleware, token_auth=token_auth)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "initialize"},
+            headers={"Accept": "application/json, text/event-stream"},
+        )
+
+    assert response.status_code == 200
+    assert response.headers["content-type"].startswith("text/event-stream")
+    assert response.text == "data: initialize\n\n"
     token_auth.validate_token.assert_not_awaited()
 
 
