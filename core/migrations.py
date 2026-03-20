@@ -49,7 +49,7 @@ async def run_migrations(pool: asyncpg.Pool) -> None:
             sql = migration_file.read_text()
 
             # Execute each statement individually for better error reporting
-            statements = [s.strip() for s in sql.split(";") if s.strip() and not s.strip().startswith("--")]
+            statements = _split_sql_statements(sql)
             for i, stmt in enumerate(statements, 1):
                 try:
                     await conn.execute(stmt)
@@ -117,3 +117,16 @@ def _extract_name(stmt: str, obj_type: str) -> str:
         return name
     except (IndexError, ValueError):
         return "unknown"
+
+
+def _split_sql_statements(sql: str) -> list[str]:
+    """Split a migration file into executable statements while ignoring line comments."""
+    cleaned_lines = []
+    for line in sql.splitlines():
+        stripped = line.strip()
+        if not stripped or stripped.startswith("--"):
+            continue
+        cleaned_lines.append(line)
+
+    cleaned_sql = "\n".join(cleaned_lines)
+    return [stmt.strip() for stmt in cleaned_sql.split(";") if stmt.strip()]
