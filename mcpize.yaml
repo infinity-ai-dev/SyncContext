@@ -7,7 +7,7 @@ runtime: python
 entry: server/main.py
 
 build:
-  install: pip install -r requirements.txt
+  install: pip install -r requirements.txt && pip install --no-deps .
 
 startCommand:
   type: stdio
