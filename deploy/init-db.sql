@@ -1,7 +1,7 @@
 -- ============================================
--- SyncContext - Preparação do Postgres
+-- SyncContext - Preparação do Postgres 16
 -- ============================================
--- Só precisa rodar UMA VEZ antes do primeiro deploy.
+-- Executar UMA VEZ antes do primeiro deploy.
 -- As tabelas são criadas automaticamente pelo container.
 --
 -- Uso:
@@ -11,7 +11,7 @@
 SELECT 'CREATE DATABASE synccontext'
 WHERE NOT EXISTS (SELECT FROM pg_database WHERE datname = 'synccontext')\gexec
 
--- 2. Habilitar extensões (pgvector precisa estar instalado no Postgres)
+-- 2. Habilitar extensões (pgvector precisa estar instalado: apt install postgresql-16-pgvector)
 \c synccontext
 
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
@@ -19,8 +19,7 @@ CREATE EXTENSION IF NOT EXISTS "vector";
 
 -- 3. Verificar
 \echo ''
-\echo 'Database synccontext criado com sucesso!'
-\echo 'Extensões habilitadas:'
+\echo 'Database synccontext pronto!'
 SELECT extname, extversion FROM pg_extension WHERE extname IN ('uuid-ossp', 'vector');
 \echo ''
-\echo 'As tabelas serão criadas automaticamente na primeira execução do container.'
+\echo 'As tabelas serao criadas automaticamente pelo container do SyncContext.'

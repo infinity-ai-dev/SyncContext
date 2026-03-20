@@ -1,21 +1,12 @@
 #!/bin/bash
 # ============================================
-# SyncContext - Inicialização do Banco de Dados
+# SyncContext - Preparação do Postgres 16
 # ============================================
-# Executa no container do Postgres existente para:
-# 1. Instalar a extensão pgvector
-# 2. Criar o database synccontext
-# 3. Habilitar as extensões necessárias
+# Executar UMA VEZ antes do primeiro deploy.
+# O container do SyncContext cria as tabelas automaticamente.
 #
-# Uso:
-#   docker exec -it $(docker ps -q -f name=postgres) bash
-#   # Dentro do container:
-#   apt-get update && apt-get install -y postgresql-17-pgvector
-#   psql -U postgres -f /tmp/init-db.sql
-#
-# Ou direto do host:
-#   docker cp deploy/init-db.sql $(docker ps -q -f name=postgres):/tmp/
-#   docker exec $(docker ps -q -f name=postgres) bash -c "apt-get update && apt-get install -y postgresql-17-pgvector && psql -U postgres -f /tmp/init-db.sql"
+# Uso (via SSH na VPS):
+#   bash init-db.sh
 
 set -e
 
@@ -23,14 +14,47 @@ POSTGRES_CONTAINER=$(docker ps -q -f name=postgres)
 
 if [ -z "$POSTGRES_CONTAINER" ]; then
     echo "Erro: Container do Postgres não encontrado"
+    echo "Verifique com: docker ps -f name=postgres"
     exit 1
 fi
 
-echo "==> Instalando pgvector no container Postgres..."
-docker exec "$POSTGRES_CONTAINER" bash -c "apt-get update && apt-get install -y postgresql-17-pgvector"
+echo ""
+echo "========================================="
+echo " SyncContext - Preparando Postgres 16"
+echo "========================================="
+echo ""
 
-echo "==> Criando database e extensões..."
-docker cp "$(dirname "$0")/init-db.sql" "$POSTGRES_CONTAINER":/tmp/init-db.sql
-docker exec "$POSTGRES_CONTAINER" psql -U postgres -f /tmp/init-db.sql
+# 1. Instalar pgvector (para Postgres 16)
+echo "[1/3] Instalando pgvector..."
+docker exec "$POSTGRES_CONTAINER" bash -c \
+    "apt-get update -qq && apt-get install -y -qq postgresql-16-pgvector > /dev/null 2>&1"
+echo "  pgvector instalado"
 
-echo "==> Pronto! Database 'synccontext' criado com pgvector habilitado."
+# 2. Criar database
+echo "[2/3] Criando database synccontext..."
+docker exec "$POSTGRES_CONTAINER" psql -U postgres -tc \
+    "SELECT 1 FROM pg_database WHERE datname = 'synccontext'" | grep -q 1 \
+    && echo "  Database já existe" \
+    || docker exec "$POSTGRES_CONTAINER" psql -U postgres -c "CREATE DATABASE synccontext" \
+    && echo "  Database criado"
+
+# 3. Habilitar extensões
+echo "[3/3] Habilitando extensões..."
+docker exec "$POSTGRES_CONTAINER" psql -U postgres -d synccontext -c '
+CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
+CREATE EXTENSION IF NOT EXISTS "vector";
+'
+echo "  Extensões habilitadas"
+
+# Verificar
+echo ""
+echo "========================================="
+echo " Verificação"
+echo "========================================="
+docker exec "$POSTGRES_CONTAINER" psql -U postgres -d synccontext -c \
+    "SELECT extname, extversion FROM pg_extension WHERE extname IN ('uuid-ossp', 'vector');"
+
+echo ""
+echo "Pronto! Agora faça o deploy da stack no Portainer."
+echo "As tabelas serão criadas automaticamente pelo container."
+echo ""

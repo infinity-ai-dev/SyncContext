@@ -4,7 +4,7 @@ version: "3.7"
 # SyncContext - Stack para Portainer / Docker Swarm
 # ============================================
 # Domínio: mcp.rat.mayacrm.shop
-# Requer: Postgres com pgvector na rede network_public
+# Requer: Postgres:16 com pgvector na rede network_public
 #
 # Variáveis de ambiente para configurar no Portainer:
 #   SYNCCONTEXT_PROJECT_TOKEN    - Token do projeto (gerado no passo de setup)
@@ -25,7 +25,7 @@ services:
       # Auth
       - SYNCCONTEXT_PROJECT_TOKEN=${SYNCCONTEXT_PROJECT_TOKEN}
       - SYNCCONTEXT_ADMIN_TOKEN=${SYNCCONTEXT_ADMIN_TOKEN:-}
-      # Banco de Dados (Postgres existente na rede network_public)
+      # Banco de Dados (Postgres:16 existente na rede network_public)
       - SYNCCONTEXT_DATABASE_URL=postgresql://postgres:7y8auHScpUTrQWhjbrlu8yc0RzNib2wn@postgres:5432/synccontext
       # Vector Store
       - SYNCCONTEXT_VECTOR_STORE=pgvector
@@ -68,5 +68,5 @@ services:
 
 networks:
   network_public:
-    name: network_public
     external: true
+    name: network_public
