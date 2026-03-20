@@ -213,9 +213,11 @@ def register_tools(mcp: FastMCP) -> None:
         if context.total_memories == 0:
             return "This project has no memories yet. Use save_memory to start building the knowledge base."
 
-        tags_str = ", ".join(
-            f"{list(t.keys())[0]} ({list(t.values())[0]})" for t in context.top_tags
-        ) if context.top_tags else "none"
+        tags_str = (
+            ", ".join(f"{list(t.keys())[0]} ({list(t.values())[0]})" for t in context.top_tags)
+            if context.top_tags
+            else "none"
+        )
 
         contributors_str = ", ".join(context.contributors) if context.contributors else "none"
 

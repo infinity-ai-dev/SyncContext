@@ -165,7 +165,7 @@ class MemoryService:
         idx = 2
 
         if tag:
-            query += f" AND ${ idx } = ANY(tags)"
+            query += f" AND ${idx} = ANY(tags)"
             params.append(tag)
             idx += 1
 

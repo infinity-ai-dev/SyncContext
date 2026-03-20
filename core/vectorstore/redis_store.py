@@ -30,8 +30,7 @@ class RedisVectorStore(VectorStore):
             module_names = [m[b"name"].decode() if isinstance(m[b"name"], bytes) else m[b"name"] for m in modules]
             if "search" not in module_names:
                 raise RuntimeError(
-                    "Redis Stack with RediSearch module is required. "
-                    "Use the redis/redis-stack Docker image."
+                    "Redis Stack with RediSearch module is required. Use the redis/redis-stack Docker image."
                 )
         except redis.ResponseError:
             pass  # Some Redis versions don't support MODULE LIST
@@ -97,11 +96,13 @@ class RedisVectorStore(VectorStore):
             if isinstance(meta_str, bytes):
                 meta_str = meta_str.decode()
 
-            output.append({
-                "id": UUID(doc.memory_id.decode() if isinstance(doc.memory_id, bytes) else doc.memory_id),
-                "score": similarity,
-                "metadata": json.loads(meta_str),
-            })
+            output.append(
+                {
+                    "id": UUID(doc.memory_id.decode() if isinstance(doc.memory_id, bytes) else doc.memory_id),
+                    "score": similarity,
+                    "metadata": json.loads(meta_str),
+                }
+            )
         return output
 
     async def delete(self, id: UUID) -> bool:
