@@ -173,9 +173,9 @@ async def test_shared_project_token_fallback_sets_project_context():
 
 
 @pytest.mark.asyncio
-async def test_shared_project_token_fallback_takes_precedence_over_authorization():
+async def test_authorization_takes_precedence_over_shared_project_token_fallback():
     token_auth = AsyncMock()
-    token_auth.validate_token.return_value = SimpleNamespace(id="p1", name="Shared Project")
+    token_auth.validate_token.return_value = SimpleNamespace(id="p1", name="Bearer Project")
     app = _build_app(
         token_auth,
         fallback_project_token="shared_token",
@@ -187,9 +187,27 @@ async def test_shared_project_token_fallback_takes_precedence_over_authorization
         response = await client.post(
             "/mcp",
             json={"jsonrpc": "2.0", "id": 1, "method": "tools/call"},
-            headers={"Authorization": "Bearer gateway_token"},
+            headers={"Authorization": "Bearer bearer_token"},
         )
 
     assert response.status_code == 200
     assert response.json() == {"method": "tools/call", "project": "Shared Project"}
-    token_auth.validate_token.assert_awaited_once_with("shared_token")
+    token_auth.validate_token.assert_awaited_once_with("bearer_token")
+
+
+@pytest.mark.asyncio
+async def test_uninitialized_token_auth_returns_503():
+    token_auth = AsyncMock()
+    token_auth.validate_token.side_effect = RuntimeError("TokenAuth not yet initialized — server startup incomplete")
+    app = _build_app(token_auth)
+
+    transport = httpx.ASGITransport(app=app)
+    async with httpx.AsyncClient(transport=transport, base_url="http://testserver") as client:
+        response = await client.post(
+            "/mcp",
+            json={"jsonrpc": "2.0", "id": 1, "method": "tools/call"},
+            headers={"Authorization": "Bearer sc_token"},
+        )
+
+    assert response.status_code == 503
+    assert response.json() == {"error": "Server startup incomplete. Retry in a few seconds."}

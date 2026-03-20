@@ -55,22 +55,31 @@ class ProjectAuthMiddleware(BaseHTTPMiddleware):
         # Extract optional project name from header (used on first connection)
         project_name = request.headers.get("x-project-name", "").strip() or self._fallback_project_name
 
-        # Resolve project: look up token in DB, auto-create if new
-        project = await self._token_auth.validate_token(token)
+        try:
+            # Resolve project: look up token in DB, auto-create if new
+            project = await self._token_auth.validate_token(token)
 
-        if not project:
-            # New token — create project automatically
-            name = project_name if project_name else f"Project {token[:12]}"
-            project = await self._token_auth.create_project_with_token(
-                token=token,
-                name=name,
+            if not project:
+                # New token — create project automatically
+                name = project_name if project_name else f"Project {token[:12]}"
+                project = await self._token_auth.create_project_with_token(
+                    token=token,
+                    name=name,
+                )
+                logger.info(f"New project auto-created: {project.name} (token={token[:12]}...)")
+            else:
+                # Update name if provided and different
+                if project_name and project_name != project.name:
+                    await self._token_auth.update_project_name(project.id, project_name)
+                    project.name = project_name
+        except RuntimeError as exc:
+            if "TokenAuth not yet initialized" not in str(exc):
+                raise
+            logger.warning("Request received before TokenAuth was ready")
+            return JSONResponse(
+                {"error": "Server startup incomplete. Retry in a few seconds."},
+                status_code=503,
             )
-            logger.info(f"New project auto-created: {project.name} (token={token[:12]}...)")
-        else:
-            # Update name if provided and different
-            if project_name and project_name != project.name:
-                await self._token_auth.update_project_name(project.id, project_name)
-                project.name = project_name
 
         # Set the project in contextvar for tool handlers
         ctx_token = current_project.set(project)
@@ -82,17 +91,17 @@ class ProjectAuthMiddleware(BaseHTTPMiddleware):
             current_project.reset(ctx_token)
 
     def _extract_project_token(self, request: Request) -> str:
-        """Prefer explicit header, then shared fallback, then Authorization."""
+        """Prefer explicit header, then Authorization, then shared fallback."""
         project_token = request.headers.get("x-project-token", "").strip()
         if project_token:
             return project_token
 
-        if self._fallback_project_token:
-            return self._fallback_project_token
-
         auth_header = request.headers.get("authorization", "")
         if auth_header.startswith("Bearer "):
             return auth_header.removeprefix("Bearer ").strip()
+
+        if self._fallback_project_token:
+            return self._fallback_project_token
 
         return ""
 

@@ -10,6 +10,7 @@ from core.embeddings import create_embedding_provider
 from core.migrations import run_migrations
 from core.vectorstore import create_vector_store
 from server.config import Settings
+from server.runtime import runtime_state
 from server.tools import register_tools
 
 _settings = Settings()
@@ -60,6 +61,7 @@ async def lifespan(server: FastMCP):
     # 3. Initialize auth
     logger.info("Initializing authentication...")
     token_auth = TokenAuth(pool)
+    runtime_state.token_auth = token_auth
 
     # When a shared project token is configured, ensure it exists on startup.
     if settings.has_shared_project_token():
@@ -125,6 +127,7 @@ async def lifespan(server: FastMCP):
 
     # 7. Cleanup
     logger.info("Shutting down SyncContext...")
+    runtime_state.token_auth = None
     await embeddings.close()
     await vector_store.close()
     await pool.close()
@@ -184,7 +187,7 @@ def main():
         # We pass a lazy reference that gets resolved after lifespan starts.
         app.add_middleware(
             ProjectAuthMiddleware,
-            token_auth=_LazyTokenAuth(),
+            token_auth=_RuntimeTokenAuth(),
             fallback_project_token=settings.project_token if settings.has_shared_project_token() else None,
             fallback_project_name=settings.project_name if settings.has_shared_project_token() else "",
         )
@@ -204,12 +207,8 @@ def main():
         mcp.run(transport="stdio")
 
 
-class _LazyTokenAuth:
-    """Proxy that lazily resolves TokenAuth from the lifespan context.
-
-    The middleware is added before lifespan runs, so we use this proxy
-    to defer access to the actual TokenAuth until the first request.
-    """
+class _RuntimeTokenAuth:
+    """Proxy that resolves TokenAuth from module runtime state."""
 
     _instance: TokenAuth | None = None
 
@@ -224,14 +223,9 @@ class _LazyTokenAuth:
 
     def _get(self) -> TokenAuth:
         if self._instance is None:
-            # Resolve from the MCP server's session manager state
-            ctx = mcp._session_manager
-            if ctx and hasattr(ctx, "_app") and hasattr(ctx._app, "_lifespan_context"):
-                lc = ctx._app._lifespan_context
-                if lc and "token_auth" in lc:
-                    self._instance = lc["token_auth"]
+            self._instance = runtime_state.token_auth
         if self._instance is None:
-            raise RuntimeError("TokenAuth not yet initialized — lifespan hasn't started")
+            raise RuntimeError("TokenAuth not yet initialized — server startup incomplete")
         return self._instance
 
 
