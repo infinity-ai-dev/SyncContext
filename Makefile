@@ -33,4 +33,4 @@ docker-logs:
 	docker compose logs -f synccontext
 
 docker-build:
-	docker build -t synccontext:local .
+	docker build -f Dockerfile.selfhosted -t synccontext:local .
