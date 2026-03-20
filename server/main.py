@@ -12,11 +12,13 @@ from core.vectorstore import create_vector_store
 from server.config import Settings
 from server.tools import register_tools
 
+_settings = Settings()
+
 
 @asynccontextmanager
 async def lifespan(server: FastMCP):
     """Initialize all resources on startup, cleanup on shutdown."""
-    settings = Settings()
+    settings = _settings
 
     logging.basicConfig(
         level=getattr(logging, settings.log_level),
@@ -24,6 +26,7 @@ async def lifespan(server: FastMCP):
     )
     logger = logging.getLogger("synccontext")
     logger.info("Starting SyncContext MCP server...")
+    logger.info(f"Transport: {settings.transport} | Host: {settings.host}:{settings.port}")
 
     # 1. Connect to PostgreSQL
     pool = await asyncpg.create_pool(settings.database_url, min_size=2, max_size=10)
@@ -84,6 +87,8 @@ mcp = FastMCP(
         "Use search_memories to find relevant context from team members. "
         "Use get_project_context when onboarding or needing an overview."
     ),
+    host=_settings.host,
+    port=_settings.port,
     lifespan=lifespan,
 )
 
@@ -91,8 +96,7 @@ register_tools(mcp)
 
 
 def main():
-    settings = Settings()
-    mcp.run(transport=settings.transport)
+    mcp.run(transport=_settings.transport)
 
 
 if __name__ == "__main__":

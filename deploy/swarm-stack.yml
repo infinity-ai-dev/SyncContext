@@ -1,0 +1,70 @@
+version: "3.7"
+
+# ============================================
+# SyncContext - Stack para Docker Swarm
+# ============================================
+# Deploy: docker stack deploy -c swarm-stack.yml synccontext
+# Domínio: mcp.rat.mayacrm.shop
+# Requer: Postgres com pgvector na rede network_public
+
+services:
+  synccontext:
+    image: infinitytools/synccontext:${SYNCCONTEXT_VERSION:-latest}
+    hostname: "{{.Service.Name}}.{{.Task.Slot}}"
+    networks:
+      - network_public
+    environment:
+      # ── Auth ────────────────────────────────────────────
+      # Token do projeto (API key compartilhada pelo time)
+      - SYNCCONTEXT_PROJECT_TOKEN=${SYNCCONTEXT_PROJECT_TOKEN}
+
+      # ── Banco de Dados ──────────────────────────────────
+      # Conecta ao Postgres existente na rede network_public
+      - SYNCCONTEXT_DATABASE_URL=postgresql://postgres:7y8auHScpUTrQWhjbrlu8yc0RzNib2wn@postgres:5432/synccontext
+
+      # ── Vector Store ────────────────────────────────────
+      - SYNCCONTEXT_VECTOR_STORE=pgvector
+
+      # ── Embedding ───────────────────────────────────────
+      - SYNCCONTEXT_EMBEDDING_PROVIDER=${SYNCCONTEXT_EMBEDDING_PROVIDER:-gemini}
+      - SYNCCONTEXT_GEMINI_API_KEY=${SYNCCONTEXT_GEMINI_API_KEY}
+      - SYNCCONTEXT_OPENAI_API_KEY=${SYNCCONTEXT_OPENAI_API_KEY:-}
+
+      # ── Transport ───────────────────────────────────────
+      # HTTP para acesso via Traefik (não stdio)
+      - SYNCCONTEXT_TRANSPORT=streamable-http
+      - SYNCCONTEXT_HOST=0.0.0.0
+      - SYNCCONTEXT_PORT=8080
+      - SYNCCONTEXT_LOG_LEVEL=${SYNCCONTEXT_LOG_LEVEL:-INFO}
+
+    deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
+      resources:
+        limits:
+          cpus: "1"
+          memory: 512M
+        reservations:
+          memory: 128M
+      labels:
+        # ── Traefik ─────────────────────────────────────
+        - traefik.enable=true
+        - traefik.http.routers.synccontext.rule=Host(`mcp.rat.mayacrm.shop`)
+        - traefik.http.routers.synccontext.entrypoints=websecure
+        - traefik.http.routers.synccontext.tls.certresolver=letsencryptresolver
+        - traefik.http.routers.synccontext.service=synccontext
+        - traefik.http.services.synccontext.loadbalancer.server.port=8080
+        - traefik.http.services.synccontext.loadbalancer.passHostHeader=true
+      update_config:
+        parallelism: 1
+        delay: 30s
+        order: start-first
+        failure_action: rollback
+
+networks:
+  network_public:
+    name: network_public
+    external: true

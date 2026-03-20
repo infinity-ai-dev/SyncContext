@@ -34,4 +34,6 @@ class Settings(BaseSettings):
 
     # Server
     transport: Literal["stdio", "sse", "streamable-http"] = "stdio"
+    host: str = "0.0.0.0"
+    port: int = 8080
     log_level: Literal["DEBUG", "INFO", "WARNING", "ERROR", "CRITICAL"] = "INFO"
