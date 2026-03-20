@@ -217,7 +217,7 @@ SYNCCONTEXT_PROJECT_TOKEN=project-alpha-backend
 Multi-arch images available for `linux/amd64` and `linux/arm64`:
 
 ```bash
-docker pull ghcr.io/infinity-ai-dev/synccontext:latest
+docker pull infinitytools/synccontext:latest
 ```
 
 ---

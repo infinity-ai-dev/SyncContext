@@ -10,7 +10,7 @@
 
 services:
   synccontext:
-    image: ghcr.io/infinity-ai-dev/synccontext:${SYNCCONTEXT_VERSION:-latest}
+    image: infinitytools/synccontext:${SYNCCONTEXT_VERSION:-latest}
     environment:
       SYNCCONTEXT_PROJECT_TOKEN: ${SYNCCONTEXT_PROJECT_TOKEN:-dev-token}
       SYNCCONTEXT_DATABASE_URL: postgresql://synccontext:${POSTGRES_PASSWORD:-synccontext}@postgres:5432/synccontext
