@@ -1,5 +1,7 @@
+version: "3.7"
+
 # ============================================
-# SyncContext - Docker Compose (local + self-hosted)
+# SyncContext - Docker Compose
 # ============================================
 # Uso:
 #   pgvector (default):  docker compose up -d
@@ -9,107 +11,66 @@
 #   - GEMINI_API_KEY preenchida → usa Gemini (default, grátis)
 #   - OPENAI_API_KEY preenchida → usa OpenAI
 #   - OLLAMA_BASE_URL preenchida → usa Ollama (offline)
+#
+# Variáveis de ambiente no Portainer ou .env:
+#   SYNCCONTEXT_PROJECT_TOKEN    - Token do projeto
+#   SYNCCONTEXT_GEMINI_API_KEY   - Chave Gemini (grátis)
+#   SYNCCONTEXT_OPENAI_API_KEY   - Chave OpenAI (opcional)
+#   SYNCCONTEXT_OLLAMA_BASE_URL  - URL do Ollama (opcional)
+#   SYNCCONTEXT_ADMIN_TOKEN      - Token admin (opcional)
 
 services:
   synccontext:
     image: infinitytools/synccontext:${SYNCCONTEXT_VERSION:-latest}
+    hostname: "{{.Service.Name}}.{{.Task.Slot}}"
+    networks:
+      - network_public
     environment:
       # Auth
-      SYNCCONTEXT_PROJECT_TOKEN: ${SYNCCONTEXT_PROJECT_TOKEN:-dev-token}
-      SYNCCONTEXT_ADMIN_TOKEN: ${SYNCCONTEXT_ADMIN_TOKEN:-}
-      # Database
-      SYNCCONTEXT_DATABASE_URL: postgresql://synccontext:${POSTGRES_PASSWORD:-synccontext}@postgres:5432/synccontext
+      - SYNCCONTEXT_PROJECT_TOKEN=${SYNCCONTEXT_PROJECT_TOKEN}
+      - SYNCCONTEXT_ADMIN_TOKEN=${SYNCCONTEXT_ADMIN_TOKEN:-}
+      # Database (Postgres existente na rede network_public)
+      - SYNCCONTEXT_DATABASE_URL=postgresql://postgres:7y8auHScpUTrQWhjbrlu8yc0RzNib2wn@postgres:5432/synccontext
       # Vector Store
-      SYNCCONTEXT_VECTOR_STORE: ${SYNCCONTEXT_VECTOR_STORE:-pgvector}
-      SYNCCONTEXT_REDIS_URL: redis://redis:6379/0
-      # Embedding (auto-detect: preencha a credencial do provider desejado)
-      SYNCCONTEXT_EMBEDDING_PROVIDER: ${SYNCCONTEXT_EMBEDDING_PROVIDER:-auto}
-      SYNCCONTEXT_GEMINI_API_KEY: ${SYNCCONTEXT_GEMINI_API_KEY:-}
-      SYNCCONTEXT_OPENAI_API_KEY: ${SYNCCONTEXT_OPENAI_API_KEY:-}
-      SYNCCONTEXT_OLLAMA_BASE_URL: ${SYNCCONTEXT_OLLAMA_BASE_URL:-}
-      SYNCCONTEXT_OLLAMA_MODEL: ${SYNCCONTEXT_OLLAMA_MODEL:-nomic-embed-text}
-      # Transport
-      SYNCCONTEXT_TRANSPORT: ${SYNCCONTEXT_TRANSPORT:-stdio}
-      SYNCCONTEXT_HOST: "0.0.0.0"
-      SYNCCONTEXT_PORT: "8080"
-      SYNCCONTEXT_LOG_LEVEL: ${SYNCCONTEXT_LOG_LEVEL:-INFO}
-    depends_on:
-      postgres:
-        condition: service_healthy
-    stdin_open: true
-    restart: unless-stopped
+      - SYNCCONTEXT_VECTOR_STORE=pgvector
+      # Embedding (auto-detectado pela credencial preenchida)
+      - SYNCCONTEXT_EMBEDDING_PROVIDER=auto
+      - SYNCCONTEXT_GEMINI_API_KEY=${SYNCCONTEXT_GEMINI_API_KEY:-}
+      - SYNCCONTEXT_OPENAI_API_KEY=${SYNCCONTEXT_OPENAI_API_KEY:-}
+      - SYNCCONTEXT_OLLAMA_BASE_URL=${SYNCCONTEXT_OLLAMA_BASE_URL:-}
+      - SYNCCONTEXT_OLLAMA_MODEL=${SYNCCONTEXT_OLLAMA_MODEL:-nomic-embed-text}
+      # Transport HTTP (Traefik faz o SSL)
+      - SYNCCONTEXT_TRANSPORT=streamable-http
+      - SYNCCONTEXT_HOST=0.0.0.0
+      - SYNCCONTEXT_PORT=8080
+      - SYNCCONTEXT_LOG_LEVEL=INFO
     deploy:
+      mode: replicated
+      replicas: 1
+      placement:
+        constraints:
+          - node.role == manager
       resources:
         limits:
+          cpus: "1"
           memory: 512M
         reservations:
           memory: 128M
-    networks:
-      - synccontext-net
-    healthcheck:
-      test: ["CMD", "python", "-c", "import server.main"]
-      interval: 30s
-      timeout: 10s
-      retries: 3
-      start_period: 20s
-
-  postgres:
-    image: pgvector/pgvector:pg17
-    environment:
-      POSTGRES_USER: synccontext
-      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-synccontext}
-      POSTGRES_DB: synccontext
-    volumes:
-      - pgdata:/var/lib/postgresql/data
-    ports:
-      - "${POSTGRES_PORT:-5432}:5432"
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 512M
-        reservations:
-          memory: 256M
-    networks:
-      - synccontext-net
-    healthcheck:
-      test: ["CMD-SHELL", "pg_isready -U synccontext -d synccontext"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-
-  redis:
-    image: redis/redis-stack:latest
-    command: redis-server --appendonly yes
-    profiles:
-      - redis
-    ports:
-      - "${REDIS_PORT:-6379}:6379"
-    volumes:
-      - redisdata:/data
-    restart: unless-stopped
-    deploy:
-      resources:
-        limits:
-          memory: 512M
-        reservations:
-          memory: 128M
-    networks:
-      - synccontext-net
-    healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
-      interval: 5s
-      timeout: 5s
-      retries: 5
-      start_period: 10s
-
-volumes:
-  pgdata:
-    driver: local
-  redisdata:
-    driver: local
+      labels:
+        - traefik.enable=true
+        - traefik.http.routers.synccontext.rule=Host(`mcp.rat.mayacrm.shop`)
+        - traefik.http.routers.synccontext.entrypoints=websecure
+        - traefik.http.routers.synccontext.tls.certresolver=letsencryptresolver
+        - traefik.http.routers.synccontext.service=synccontext
+        - traefik.http.services.synccontext.loadbalancer.server.port=8080
+        - traefik.http.services.synccontext.loadbalancer.passHostHeader=true
+      update_config:
+        parallelism: 1
+        delay: 30s
+        order: start-first
+        failure_action: rollback
 
 networks:
-  synccontext-net:
-    driver: bridge
+  network_public:
+    external: true
+    name: network_public
