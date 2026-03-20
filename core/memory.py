@@ -1,5 +1,5 @@
 import logging
-from datetime import datetime
+from datetime import UTC, datetime
 from uuid import UUID, uuid4
 
 import asyncpg
@@ -29,7 +29,7 @@ class MemoryService:
     async def save_memory(self, data: MemoryCreate) -> Memory:
         """Save a new memory with its embedding."""
         memory_id = uuid4()
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
 
         # 1. Generate embedding
         embedding = await self._embeddings.embed(data.content)
@@ -38,7 +38,8 @@ class MemoryService:
         async with self._pool.acquire() as conn:
             await conn.execute(
                 """
-                INSERT INTO memories (id, project_token, content, author, tags, file_path, memory_type, created_at, updated_at)
+                INSERT INTO memories
+                    (id, project_token, content, author, tags, file_path, memory_type, created_at, updated_at)
                 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
                 """,
                 memory_id,
@@ -90,7 +91,7 @@ class MemoryService:
         if not existing:
             return None
 
-        now = datetime.utcnow()
+        now = datetime.now(UTC)
         new_content = data.content if data.content is not None else existing.content
         new_tags = data.tags if data.tags is not None else existing.tags
         new_file_path = data.file_path if data.file_path is not None else existing.file_path

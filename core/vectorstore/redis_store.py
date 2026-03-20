@@ -4,7 +4,7 @@ from uuid import UUID
 import numpy as np
 import redis.asyncio as redis
 from redis.commands.search.field import TagField, VectorField
-from redis.commands.search.indexDefinition import IndexDefinition, IndexType
+from redis.commands.search.index_definition import IndexDefinition, IndexType
 from redis.commands.search.query import Query
 
 from core.vectorstore.base import VectorStore
