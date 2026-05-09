@@ -21,7 +21,7 @@ class Settings(BaseSettings):
 
     # PostgreSQL (always required for metadata)
     database_url: str = "postgresql://synccontext:password@localhost:5432/synccontext"
-    local_database_url: str | None = "postgresql://postgres:7y8auHScpUTrQWhjbrlu8yc0RzNib2wn@postgres:5432/synccontext"
+    local_database_url: str | None = "postgresql://postgres:{{$token}}@postgres:5432/synccontext"
     direct_url: str | None = None
 
     # Vector store selection
